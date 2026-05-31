@@ -283,6 +283,66 @@ def fetch_reddit_posts(subreddit: str = "Bitcoin", listing: str = "new",
     return pd.DataFrame(linhas).sort_values("date").reset_index(drop=True)
 
 
+def fetch_crypto_news(limit: int = 50) -> pd.DataFrame:
+    """
+    Baixa manchetes recentes de cripto da CryptoCompare (grátis, sem chave).
+
+    Serve de FALLBACK para o texto da IA: o Reddit bloqueia requisições de
+    servidores de datacenter (HTTP 429/403), o que esvazia a tabela quando o
+    app roda na nuvem (ex.: Streamlit Cloud). A CryptoCompare libera esses
+    servidores. As colunas são iguais às do Reddit, para uso intercambiável.
+
+    Retorna DataFrame ['date', 'title', 'text', 'subreddit'] ou vazio.
+    (Em 'subreddit' colocamos a fonte da notícia, ex.: "news:coindesk".)
+    """
+    url = "https://min-api.cryptocompare.com/data/v2/news/"
+    try:
+        r = requests.get(url, params={"lang": "EN"}, timeout=HTTP_TIMEOUT,
+                         headers={"User-Agent": USER_AGENT})
+        r.raise_for_status()
+        artigos = r.json().get("Data", [])
+    except Exception as e:
+        print(f"[News] Falha ao baixar notícias: {e}")
+        return pd.DataFrame(columns=["date", "title", "text", "subreddit"])
+
+    linhas = []
+    for a in artigos[:limit]:
+        ts = a.get("published_on")
+        if ts is None:
+            continue
+        linhas.append({
+            "date": pd.to_datetime(ts, unit="s"),
+            "title": a.get("title", "") or "",
+            "text": a.get("body", "") or "",
+            "subreddit": f"news:{a.get('source', 'cryptocompare')}",
+        })
+
+    if not linhas:
+        return pd.DataFrame(columns=["date", "title", "text", "subreddit"])
+
+    return pd.DataFrame(linhas).sort_values("date").reset_index(drop=True)
+
+
+def fetch_textos_para_ia(subreddits=("Bitcoin",), limit: int = 100) -> pd.DataFrame:
+    """
+    Junta texto para a IA com FALLBACK robusto: tenta o Reddit (posts dos
+    subreddits pedidos) e, se vier vazio (ex.: bloqueio na nuvem), cai para
+    as notícias da CryptoCompare. Sempre devolve as mesmas colunas.
+    """
+    frames = []
+    for sub in subreddits:
+        df = fetch_reddit_posts(sub, "new", limit)
+        if not df.empty:
+            frames.append(df)
+
+    if frames:
+        return pd.concat(frames, ignore_index=True)
+
+    print("[Texto IA] Reddit indisponível — usando notícias (CryptoCompare).")
+    return fetch_crypto_news(limit=limit)
+
+
+
 # --------------------------------------------------------------------------
 # Utilidades de análise
 # --------------------------------------------------------------------------

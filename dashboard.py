@@ -61,13 +61,11 @@ def carregar_trends() -> pd.DataFrame:
     return common.fetch_google_trends(termo="Bitcoin", timeframe="today 5-y")
 
 
-@st.cache_data(ttl=900, show_spinner="Buscando posts do Reddit...")
+@st.cache_data(ttl=900, show_spinner="Buscando texto para a IA (Reddit/notícias)...")
 def carregar_reddit(subreddits: tuple) -> pd.DataFrame:
-    frames = [common.fetch_reddit_posts(sub, "new", 100) for sub in subreddits]
-    frames = [f for f in frames if not f.empty]
-    if not frames:
-        return pd.DataFrame(columns=["date", "title", "text", "subreddit"])
-    return pd.concat(frames, ignore_index=True)
+    # Tenta o Reddit; se vier vazio (ex.: bloqueio na nuvem), cai para as
+    # notícias da CryptoCompare. Assim a tabela da IA sempre tem conteúdo.
+    return common.fetch_textos_para_ia(subreddits, limit=100)
 
 
 @st.cache_data(ttl=900)
@@ -218,14 +216,17 @@ st.plotly_chart(fig, use_container_width=True)
 # --------------------------------------------------------------------------
 # Tabela de posts classificados pela IA
 # --------------------------------------------------------------------------
-st.subheader("🧠 Posts do Reddit classificados pela IA")
+st.subheader("🧠 Textos (Reddit ou notícias) classificados pela IA")
+st.caption("Tenta o Reddit; na nuvem ele costuma bloquear datacenters, então "
+           "usa notícias de cripto (CryptoCompare) como fallback.")
 
 if not subs_escolhidos:
     st.info("Escolha ao menos um subreddit na barra lateral para ver os posts.")
 else:
     posts = carregar_reddit(tuple(subs_escolhidos))
     if posts.empty:
-        st.warning("Sem posts do Reddit agora (provável rate limit). Tente depois.")
+        st.warning("Sem texto disponível agora (Reddit e notícias indisponíveis "
+                   "ou com rate limit). Tente novamente em instantes.")
     else:
         classificados = (sentimento_finbert(posts) if usar_finbert
                          else sentimento_vader(posts))

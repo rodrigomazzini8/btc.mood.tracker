@@ -66,7 +66,7 @@ def main() -> None:
         return
 
     # 2) Posts recentes do Reddit (fonte de texto p/ a IA).
-    posts = common.fetch_reddit_posts(subreddit="Bitcoin", listing="new", limit=100)
+    posts = common.fetch_textos_para_ia(subreddits=("Bitcoin",), limit=100)
     if posts.empty:
         print("Não foi possível obter posts do Reddit (rate limit?). Abortando.")
         return

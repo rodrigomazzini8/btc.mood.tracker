@@ -88,9 +88,9 @@ def main() -> None:
         return
 
     # 2) Texto real do Reddit.
-    posts = common.fetch_reddit_posts(subreddit="Bitcoin", listing="new", limit=100)
+    posts = common.fetch_textos_para_ia(subreddits=("Bitcoin",), limit=100)
     if posts.empty:
-        print("   Sem posts do Reddit (rate limit?). Abortando.")
+        print("   Sem texto disponível (Reddit e notícias indisponíveis). Abortando.")
         return
     print(f"   Reddit: {len(posts)} posts. Classificando com FinBERT...")
 

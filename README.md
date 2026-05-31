@@ -29,6 +29,7 @@ preço) e visualizar tudo de forma clara.
 | Humor histórico | **Fear & Greed Index** (alternative.me) | `api.alternative.me/fng/?limit=0` | Escala 0–100, histórico desde 2018 |
 | Atenção | **Google Trends** (via `pytrends`) | termo "Bitcoin" | *Opcional* — pode tomar rate limit (429) |
 | Texto p/ IA | **Reddit** | `reddit.com/r/<sub>/new.json` | Precisa header `User-Agent`; só posts recentes |
+| Texto p/ IA (fallback) | **CryptoCompare News** | `min-api.cryptocompare.com/data/v2/news/` | Usado quando o Reddit bloqueia datacenters (na nuvem); grátis, sem chave |
 
 ---
 
