@@ -305,8 +305,16 @@ def fetch_crypto_news(limit: int = 50) -> pd.DataFrame:
         print(f"[News] Falha ao baixar notícias: {e}")
         return pd.DataFrame(columns=["date", "title", "text", "subreddit"])
 
+    # Em caso de rate limit/erro, a API pode devolver 'Data' como dict (objeto
+    # de erro) em vez de lista. Só seguimos se for mesmo uma lista de artigos.
+    if not isinstance(artigos, list):
+        print("[News] Resposta inesperada (provável rate limit).")
+        return pd.DataFrame(columns=["date", "title", "text", "subreddit"])
+
     linhas = []
     for a in artigos[:limit]:
+        if not isinstance(a, dict):
+            continue
         ts = a.get("published_on")
         if ts is None:
             continue
