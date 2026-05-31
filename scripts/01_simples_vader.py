@@ -60,7 +60,7 @@ def main() -> None:
     print(">> [01] BTC x Sentimento do Reddit (VADER)\n")
 
     # 1) Preço do BTC (só precisamos dos últimos dias para casar com o Reddit).
-    preco = common.fetch_btc_binance(dias=60)
+    preco = common.fetch_btc_price(dias=60)
     if preco.empty:
         print("Não foi possível obter o preço do BTC. Abortando.")
         return

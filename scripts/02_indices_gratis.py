@@ -32,7 +32,7 @@ def main() -> None:
     print(">> [02] BTC x Fear & Greed (fontes grátis, sem chave)\n")
 
     # 1) Preço do BTC na Binance (paginado).
-    preco = common.fetch_btc_binance(dias=1500)
+    preco = common.fetch_btc_price(dias=1500)
     if preco.empty:
         print("Não foi possível obter o preço do BTC. Abortando.")
         return

@@ -47,7 +47,7 @@ VERMELHO = "#ef5350"
 
 @st.cache_data(ttl=3600, show_spinner="Baixando preço do BTC...")
 def carregar_preco(dias: int) -> pd.DataFrame:
-    return common.fetch_btc_binance(dias=dias)
+    return common.fetch_btc_price(dias=dias)
 
 
 @st.cache_data(ttl=3600, show_spinner="Baixando Fear & Greed...")

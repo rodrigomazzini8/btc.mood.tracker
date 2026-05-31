@@ -82,7 +82,7 @@ def plot_tres_paineis(df, tem_trends: bool, corr_fng: float,
 def main() -> None:
     print(">> [03] BTC x Fear&Greed + Google Trends\n")
 
-    preco = common.fetch_btc_binance(dias=1500)
+    preco = common.fetch_btc_price(dias=1500)
     fng = common.fetch_fear_greed(limit=0)
     if preco.empty or fng.empty:
         print("Preço ou Fear&Greed indisponível. Abortando.")

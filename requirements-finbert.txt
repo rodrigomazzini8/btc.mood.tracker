@@ -1,13 +1,16 @@
 # ==========================================================================
-# Dependências PESADAS do FinBERT (IA avançada) — uso OPCIONAL e LOCAL.
+# Dependências PESADAS do FinBERT (IA avançada) — OPCIONAIS.
 #
-# NÃO use este arquivo no Streamlit Community Cloud (tier grátis): torch é
-# grande demais e o build pode estourar memória/tempo. Para o FinBERT no ar,
-# use o Hugging Face Spaces (mais RAM).
+# Use SOMENTE localmente (ou num host com bastante RAM, ex.: Hugging Face
+# Spaces). NÃO recomendado no Streamlit Community Cloud (tier grátis), pois
+# o torch é grande demais para o limite de memória/tempo de build.
 #
-# Para usar o FinBERT localmente (scripts/05_finbert.py e o toggle do
-# dashboard), instale também:
-#     pip install -r requirements-finbert.txt
+# Instalação:
+#   pip install -r requirements.txt          # base (sempre)
+#   pip install -r requirements-finbert.txt  # + FinBERT (opcional)
+#
+# Sem estes pacotes, o script 05 avisa e sai, e o toggle FinBERT do
+# dashboard cai automaticamente para o VADER.
 # ==========================================================================
 
 transformers>=4.30

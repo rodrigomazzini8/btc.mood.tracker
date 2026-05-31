@@ -115,6 +115,57 @@ def fetch_btc_binance(dias: int = 1500, symbol: str = "BTCUSDT") -> pd.DataFrame
     return df.reset_index(drop=True)
 
 
+def fetch_btc_coingecko(dias: int = 365) -> pd.DataFrame:
+    """
+    Baixa o preço diário do BTC na CoinGecko (grátis, sem chave).
+
+    Serve de FALLBACK: a Binance bloqueia requisições de servidores nos EUA
+    (HTTP 451), o que quebra o app quando hospedado em nuvem (ex.: Streamlit
+    Community Cloud, que roda nos EUA). A CoinGecko funciona desses servidores.
+
+    Observação: o plano público/grátis costuma limitar o histórico a ~365
+    dias, então capamos `dias` em 365. Para >90 dias a granularidade já vem
+    diária automaticamente.
+
+    Retorna DataFrame ['date', 'price'] ou vazio em caso de erro.
+    """
+    dias = min(int(dias), 365)  # limite prático do tier grátis
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+    params = {"vs_currency": "usd", "days": dias}
+    try:
+        r = requests.get(url, params=params, timeout=HTTP_TIMEOUT,
+                         headers={"User-Agent": USER_AGENT})
+        r.raise_for_status()
+        precos = r.json().get("prices", [])
+    except Exception as e:
+        print(f"[CoinGecko] Falha ao baixar preço: {e}")
+        return pd.DataFrame(columns=["date", "price"])
+
+    if not precos:
+        return pd.DataFrame(columns=["date", "price"])
+
+    # Cada item é [timestamp_ms, preco]. Normalizamos para 1 ponto por dia
+    # (pegando o último preço de cada dia).
+    df = pd.DataFrame(precos, columns=["ts", "price"])
+    df["date"] = pd.to_datetime(df["ts"], unit="ms").dt.normalize()
+    df = (df.sort_values("ts")
+            .groupby("date", as_index=False)["price"].last())
+    return df[["date", "price"]].reset_index(drop=True)
+
+
+def fetch_btc_price(dias: int = 1500, symbol: str = "BTCUSDT") -> pd.DataFrame:
+    """
+    Preço do BTC com FALLBACK robusto: tenta a Binance (histórico longo,
+    ótima localmente) e, se falhar/vier vazia (ex.: bloqueio 451 na nuvem),
+    cai para a CoinGecko. Use ESTA função no lugar de chamar a Binance direto.
+    """
+    df = fetch_btc_binance(dias=dias, symbol=symbol)
+    if not df.empty:
+        return df
+    print("[Preço] Binance indisponível — tentando CoinGecko...")
+    return fetch_btc_coingecko(dias=dias)
+
+
 # --------------------------------------------------------------------------
 # 2) HUMOR HISTÓRICO — Fear & Greed Index (alternative.me)
 # --------------------------------------------------------------------------

@@ -112,7 +112,7 @@ def main() -> None:
     print(f"   Nota média FinBERT (período): {sent['finbert'].mean():.3f}")
 
     # 4) Cruza com o preço.
-    preco = common.fetch_btc_binance(dias=60)
+    preco = common.fetch_btc_price(dias=60)
     if preco.empty:
         print("   Preço indisponível. Abortando.")
         return

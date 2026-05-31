@@ -70,7 +70,7 @@ def main() -> None:
     print(">> [04] Cache CSV + média móvel + correlação defasada\n")
 
     preco = carregar_com_cache("preco_btc.csv",
-                               lambda: common.fetch_btc_binance(dias=1500))
+                               lambda: common.fetch_btc_price(dias=1500))
     fng = carregar_com_cache("fear_greed.csv",
                              lambda: common.fetch_fear_greed(limit=0))
     if preco.empty or fng.empty:
