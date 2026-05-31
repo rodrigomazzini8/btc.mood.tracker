@@ -73,9 +73,16 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-> O `requirements.txt` inclui `transformers` e `torch` (pesados), usados **só**
-> pelo FinBERT (script 05 e toggle do dashboard). Se quiser apenas o básico
-> (scripts 02–04 e o dashboard com VADER), pode comentar essas linhas.
+> O `requirements.txt` é **leve** (núcleo + VADER), pronto para deploy grátis.
+> O **FinBERT** (`torch` + `transformers`) é pesado e fica num arquivo
+> separado. Para usar a IA avançada (script 05 e toggle do dashboard)
+> **localmente**, instale também:
+>
+> ```bash
+> pip install -r requirements-finbert.txt
+> ```
+>
+> Sem isso, o dashboard cai automaticamente para o VADER.
 
 ---
 
@@ -103,6 +110,31 @@ O dashboard tem: **filtros de período**, **escolha de subreddits**, **toggle do
 FinBERT**, **métricas no topo** (preço, Fear & Greed, correlação), **gráfico
 Plotly interativo** e uma **tabela dos posts classificados pela IA**. Ele
 renderiza mesmo que o Google Trends ou o FinBERT estejam indisponíveis.
+
+---
+
+## ☁️ Deploy grátis (Streamlit Community Cloud)
+
+O dashboard pode ir ao ar de graça, sem servidor próprio:
+
+1. Garanta que o código está no GitHub (este repositório já está).
+2. Acesse **https://share.streamlit.io** e entre com sua conta do GitHub.
+3. Clique em **"New app"** e preencha:
+   - **Repository:** `rodrigomazzini8/btc.mood.tracker`
+   - **Branch:** `main` (ou a branch do projeto)
+   - **Main file path:** `dashboard.py`
+4. Clique em **Deploy**. Ele instala o `requirements.txt` (leve) e sobe o app
+   numa URL pública tipo `https://<seu-app>.streamlit.app`.
+
+Observações:
+- O `requirements.txt` é propositalmente **leve** (sem `torch`) para caber no
+  tier grátis. No deploy, o toggle do FinBERT cai para o **VADER**.
+- Quer o **FinBERT no ar**? Use o **Hugging Face Spaces** (mais RAM): crie um
+  Space tipo *Streamlit*, suba os arquivos e adicione `torch`/`transformers`
+  ao `requirements.txt` do Space.
+- ⚠️ **Vercel/Netlify não servem** para Streamlit (são para sites estáticos /
+  funções serverless de curta duração, não um servidor WebSocket de longa
+  duração).
 
 ---
 

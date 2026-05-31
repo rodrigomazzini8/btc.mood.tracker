@@ -1,0 +1,17 @@
+# Configuração do Streamlit — tema escuro (combina com os gráficos do projeto).
+# secrets.toml NÃO entra no git (.gitignore). Aqui não há segredo: o app não
+# usa nenhuma chave de API.
+
+[theme]
+base = "dark"
+primaryColor = "#f7931a"            # laranja do Bitcoin
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1d24"
+textColor = "#fafafa"
+
+[server]
+headless = true
+# Sem coleta de estatísticas de uso.
+
+[browser]
+gatherUsageStats = false
