@@ -1,6 +1,12 @@
 # ==========================================================================
-# btc-mood-tracker — dependências
+# btc-mood-tracker — dependências (deploy-friendly)
 # Todas as fontes de dados são gratuitas e SEM chave de API.
+#
+# Este arquivo é LEVE de propósito, para rodar no Streamlit Community Cloud
+# (tier grátis, ~1 GB de RAM). O FinBERT (torch + transformers) é pesado e
+# fica em requirements-finbert.txt — instale-o só localmente, se quiser a IA
+# avançada. O dashboard cai automaticamente para o VADER quando o FinBERT
+# não está instalado.
 # ==========================================================================
 
 # --- Núcleo (dados, gráficos, rede) ---
@@ -18,10 +24,3 @@ pytrends>=4.9
 # --- Dashboard interativo ---
 streamlit>=1.28
 plotly>=5.15
-
-# --- Análise de sentimento avançada (FinBERT) ---
-# Pesados: só necessários para o script 05 e para o toggle FinBERT do dashboard.
-# Se quiser apenas o básico (scripts 02-04 + dashboard sem IA pesada),
-# pode comentar as três linhas abaixo.
-transformers>=4.30
-torch>=2.0
