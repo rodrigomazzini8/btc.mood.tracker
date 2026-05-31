@@ -1,0 +1,29 @@
+# --- Cache de dados gerado pelos scripts ---
+cache/
+*.csv
+
+# --- Imagens geradas (gráficos) ---
+*.png
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Modelos / cache do Hugging Face (FinBERT) ---
+.cache/
+hf_cache/
+models/
+*.bin
+*.safetensors
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- Sistema operacional / editores ---
+.DS_Store
+.idea/
+.vscode/
