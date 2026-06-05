@@ -70,11 +70,14 @@ def carregar_snapshot_termometro(periodo: int, fng_atual: float) -> pd.DataFrame
 
 
 @st.cache_data(ttl=3600, show_spinner="Recalculando score histórico...")
-def carregar_score_historico(periodo: int, selecionados: tuple) -> pd.DataFrame:
+def carregar_score_historico(periodo: int, selecionados: tuple,
+                             incluir_onchain: bool, pesos_itens: tuple) -> pd.DataFrame:
     preco_longo = common.fetch_btc_price(dias=1500)
     fng_full = common.fetch_fear_greed(limit=0)
     sel = list(selecionados) if selecionados else None
-    return term.serie_score_historico(preco_longo, fng_full, selecionados=sel)
+    pesos = dict(pesos_itens) if pesos_itens else None
+    return term.serie_score_historico(preco_longo, fng_full, selecionados=sel,
+                                      incluir_onchain=incluir_onchain, pesos=pesos)
 
 
 @st.cache_data(ttl=900, show_spinner="Buscando texto para a IA (Reddit/notícias)...")
@@ -252,11 +255,29 @@ if not term.tem_chave_onchain():
             "`BGEO_API_KEY` (api.bgeometrics.com). Sem ela, o termômetro usa "
             "só os indicadores grátis.")
 
+# Modo avançado: permite dar PESO diferente a cada indicador (senão, média
+# simples). Fica num toggle para não poluir a interface básica.
+modo_pesos = st.toggle("⚖️ Ajustar pesos por indicador (avançado)", value=False,
+                       help="Dê mais ou menos importância a cada indicador no "
+                            "score consolidado. Desligado = média simples.")
+
 # Checkboxes: quais indicadores entram no consolidado (default: todos os ok).
 # Separados em GRÁTIS e ON-CHAIN para ficar mais organizado.
 disp = snapshot[snapshot["ok"]]
 st.markdown("**Escolha os indicadores usados no cálculo:**")
 selecionados = []
+pesos = {}
+
+def _render_indicador(col, row):
+    """Checkbox (+ slider de peso no modo avançado) de um indicador."""
+    with col:
+        marcado = st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}")
+        if marcado and modo_pesos:
+            pesos[row.chave] = st.slider(
+                "peso", 0.0, 3.0, 1.0, 0.5, key=f"peso_{row.chave}",
+                label_visibility="collapsed")
+    if marcado:
+        selecionados.append(row.chave)
 
 gratis = disp[~disp["onchain"]]
 onchain = disp[disp["onchain"]]
@@ -265,20 +286,24 @@ if not gratis.empty:
     st.caption("Grátis (calculados do preço)")
     cols_g = st.columns(max(1, len(gratis)))
     for i, row in enumerate(gratis.itertuples()):
-        with cols_g[i]:
-            if st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}"):
-                selecionados.append(row.chave)
+        _render_indicador(cols_g[i], row)
 
 if not onchain.empty:
     st.caption("On-chain (BGeometrics)")
     cols_o = st.columns(min(4, len(onchain)))
     for i, row in enumerate(onchain.itertuples()):
-        with cols_o[i % len(cols_o)]:
-            if st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}"):
-                selecionados.append(row.chave)
+        _render_indicador(cols_o[i % len(cols_o)], row)
 
-# Score consolidado dos selecionados.
-cons = term.consolidar(snapshot, selecionados or None)
+# Explicação didática de cada indicador.
+with st.expander("ℹ️ O que significa cada indicador?"):
+    for r in snapshot.itertuples():
+        exp = term.EXPLICACOES.get(r.chave, "")
+        if exp:
+            st.markdown(f"**{r.indicador}** — {exp}")
+
+# Score consolidado dos selecionados (ponderado se o modo avançado estiver on).
+pesos_ativos = pesos if modo_pesos else None
+cons = term.consolidar(snapshot, selecionados or None, pesos=pesos_ativos)
 sinal_cons = term.score_para_sinal(cons) if cons == cons else "—"
 n_usados = len([s for s in selecionados if s in set(disp["chave"])])
 
@@ -355,9 +380,12 @@ rc1.metric("🟢 Compra", n_compra)
 rc2.metric("⚪ Neutro", n_neutro)
 rc3.metric("🔴 Venda", n_venda)
 
-# Gráfico: score histórico (área) sobreposto ao preço.
-hist = carregar_score_historico(periodo, tuple(sorted(
-    [s for s in selecionados if s not in term.ONCHAIN])))
+# Gráfico: score histórico (área) sobreposto ao preço. Agora inclui a série
+# histórica dos on-chain selecionados (via cache) e respeita os pesos.
+usa_onchain_hist = any(s in term.ONCHAIN for s in selecionados)
+hist = carregar_score_historico(
+    periodo, tuple(sorted(selecionados)), usa_onchain_hist,
+    tuple(sorted(pesos.items())) if (modo_pesos and pesos) else ())
 if not hist.empty:
     corte_h = hist["date"].max() - pd.Timedelta(days=periodo)
     hist = hist[hist["date"] >= corte_h]
@@ -375,8 +403,9 @@ if not hist.empty:
     figt.update_yaxes(title_text="Preço (USD)", secondary_y=False)
     figt.update_yaxes(title_text="Score (−2 a +2)", range=[-2.2, 2.2], secondary_y=True)
     st.plotly_chart(figt, use_container_width=True)
-    st.caption("O score histórico usa só indicadores grátis com série temporal "
-               "(Mayer, 200W MA, RSI, Fear & Greed). On-chain entra no snapshot atual.")
+    st.caption("Score consolidado recalculado ao longo do tempo, sobre o preço. "
+               "Inclui os indicadores selecionados (grátis e, se houver chave, "
+               "também os on-chain) e respeita os pesos do modo avançado.")
 
 # --------------------------------------------------------------------------
 # Tabela de posts classificados pela IA

@@ -150,59 +150,76 @@ def tem_chave_onchain() -> bool:
     return bool(_ler_chave())
 
 
-def fetch_onchain_bgeometrics(metrica: str) -> float:
+def serie_onchain_cache(metrica: str) -> pd.DataFrame:
     """
-    Valor de uma métrica on-chain COM CACHE em disco.
+    SÉRIE histórica de uma métrica on-chain COM CACHE em disco.
 
     Estratégia para conviver com o limite de ~15 requisições/dia da
-    BGeometrics grátis (sem isso, os últimos indicadores do lote ficavam
-    rotacionando como "indisponível" por rate limit):
-      1) se há valor em cache e ele é recente (< TTL), usa o cache;
+    BGeometrics grátis (uma requisição traz toda a série):
+      1) se a série em cache é recente (< TTL), usa o cache (0 requisição);
       2) senão tenta a API; em sucesso, atualiza o cache;
-      3) se a API falhar (rate limit etc.), reaproveita o cache mesmo
-         que velho — melhor um valor de ontem do que "indisponível".
+      3) se a API falhar (rate limit etc.), reaproveita o cache mesmo velho —
+         melhor a série de ontem do que "indisponível".
+
+    Retorna DataFrame ['date','valor'] (vazio se nunca houve dado).
     """
     cache = _cache_load()
     entrada = cache.get(metrica)
     agora = time.time()
 
-    # 1) Cache recente -> usa direto (não gasta requisição).
+    def _do_cache_para_df(e) -> pd.DataFrame:
+        try:
+            df = pd.DataFrame(e["serie"])
+            df["date"] = pd.to_datetime(df["date"])
+            return df[["date", "valor"]]
+        except Exception:
+            return pd.DataFrame(columns=["date", "valor"])
+
+    # 1) Cache recente -> usa direto.
     if entrada and (agora - entrada.get("ts", 0)) < ONCHAIN_CACHE_TTL:
-        try:
-            return float(entrada["v"])
-        except (TypeError, ValueError, KeyError):
-            pass
+        df = _do_cache_para_df(entrada)
+        if not df.empty:
+            return df
 
-    # 2) Tenta a API.
-    valor = _fetch_onchain_raw(metrica)
-
-    if not (isinstance(valor, float) and np.isnan(valor)):
-        cache[metrica] = {"v": valor, "ts": agora}
+    # 2) Tenta a API (série completa).
+    serie = fetch_onchain_serie(metrica)
+    if not serie.empty:
+        cache[metrica] = {
+            "ts": agora,
+            "serie": [{"date": d.strftime("%Y-%m-%d"), "valor": float(v)}
+                      for d, v in zip(serie["date"], serie["valor"])],
+        }
         _cache_save(cache)
-        return valor
+        return serie
 
-    # 3) Falhou (provável rate limit) -> usa cache antigo, se houver.
+    # 3) Falhou -> usa cache antigo, se houver.
     if entrada:
-        try:
-            return float(entrada["v"])
-        except (TypeError, ValueError, KeyError):
-            pass
-    return float("nan")
+        return _do_cache_para_df(entrada)
+    return pd.DataFrame(columns=["date", "valor"])
 
 
-def _fetch_onchain_raw(metrica: str) -> float:
+def fetch_onchain_bgeometrics(metrica: str) -> float:
+    """Último valor de uma métrica on-chain (usa a série cacheada)."""
+    serie = serie_onchain_cache(metrica)
+    if serie.empty:
+        return float("nan")
+    return float(serie["valor"].dropna().iloc[-1])
+
+
+def fetch_onchain_serie(metrica: str) -> pd.DataFrame:
     """
-    Busca o ÚLTIMO valor de uma métrica on-chain na BGeometrics (sem cache).
+    Baixa a SÉRIE HISTÓRICA completa de uma métrica on-chain na BGeometrics.
 
-    Lê a chave de BGEO_API_KEY (env var ou st.secrets). Sem chave, NaN.
-    É defensivo: qualquer falha (rede, formato, rate limit) vira NaN.
+    Uma única requisição traz todo o histórico (atende ao gráfico histórico E
+    ao valor atual). Retorna DataFrame ['date','valor'] ou vazio.
 
-    A API devolve um histórico tipo [{"d": "2024-01-01", "<metrica>": "1.23"},
-    ...]; pegamos o último ponto com valor numérico.
+    Parsing defensivo: aceita lista de dicts com um campo de data (d/date/
+    unixTs/...) e um campo numérico (o valor da métrica). Qualquer falha vira
+    DataFrame vazio (indicador "indisponível", sem quebrar o app).
     """
     chave = _ler_chave()
     if not chave:
-        return float("nan")
+        return pd.DataFrame(columns=["date", "valor"])
 
     endpoint = BGEO_ENDPOINTS.get(metrica, metrica)
     # A bgeometrics.com autentica via query param ?token=... (não header).
@@ -214,26 +231,47 @@ def _fetch_onchain_raw(metrica: str) -> float:
         dados = r.json()
     except Exception as e:
         print(f"[BGeo {metrica}] indisponível: {e}")
-        return float("nan")
+        return pd.DataFrame(columns=["date", "valor"])
 
-    # A resposta é um histórico (lista de dicts), tipo:
-    #   [{"d": "2024-01-01", "unixTs": "...", "mvrv": "1.23"}, ...]
-    # Pegamos o último registro e o seu campo numérico (ignorando data/ts).
     registros = dados if isinstance(dados, list) else dados.get("data", [])
     if not isinstance(registros, list) or not registros:
-        return float("nan")
+        return pd.DataFrame(columns=["date", "valor"])
 
-    for reg in reversed(registros):
+    linhas = []
+    for reg in registros:
         if not isinstance(reg, dict):
             continue
+        data_val, num_val = None, None
         for k, v in reg.items():
-            if k.lower() in ("d", "date", "unixts", "unix_ts", "timestamp", "t"):
-                continue
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                continue
-    return float("nan")
+            kl = k.lower()
+            if kl in ("d", "date"):
+                data_val = v
+            elif kl in ("unixts", "unix_ts", "timestamp", "t", "time"):
+                # timestamp epoch (fallback se não houver 'd'/'date')
+                if data_val is None:
+                    try:
+                        data_val = pd.to_datetime(int(v), unit="s")
+                    except (TypeError, ValueError):
+                        pass
+            elif num_val is None:
+                try:
+                    num_val = float(v)
+                except (TypeError, ValueError):
+                    pass
+        if data_val is None or num_val is None:
+            continue
+        try:
+            d = pd.to_datetime(data_val).normalize()
+            if d.tzinfo is not None:  # tz-naive p/ casar com o índice do preço
+                d = d.tz_localize(None)
+        except Exception:
+            continue
+        linhas.append({"date": d, "valor": num_val})
+
+    if not linhas:
+        return pd.DataFrame(columns=["date", "valor"])
+    return (pd.DataFrame(linhas).dropna()
+            .drop_duplicates("date").sort_values("date").reset_index(drop=True))
 
 
 # ==========================================================================
@@ -283,6 +321,30 @@ NOMES = {
 
 # Quais indicadores são on-chain (precisam de chave). Espelha BGEO_ENDPOINTS.
 ONCHAIN = {"mvrv", "sopr", "mvrv_z", "nupl", "puell", "reserve_risk"}
+
+# Explicação didática de cada indicador (para tooltips/expander no dashboard).
+EXPLICACOES = {
+    "mayer": "Preço ÷ média de 200 dias. <1 = barato; >2.4 historicamente "
+             "marca topos (esticado).",
+    "ma200w": "Preço ÷ média de 200 semanas. Perto de 1 costuma marcar fundos "
+              "de ciclo; muito acima indica euforia.",
+    "rsi_mensal": "Força relativa no timeframe mensal (0–100). <30 = sobrevendido "
+                  "(compra); >70 = sobrecomprado (venda).",
+    "fng": "Índice de Medo & Ganância (0–100). Medo extremo (baixo) tende a ser "
+           "oportunidade; ganância extrema (alto), cautela.",
+    "mvrv": "Valor de mercado ÷ valor realizado. <1 = mercado abaixo do custo "
+            "médio (barato); >3.5 = topo histórico.",
+    "sopr": "Spent Output Profit Ratio. <1 = moedas movidas no prejuízo "
+            "(capitulação/compra); >1 = realização de lucro.",
+    "mvrv_z": "MVRV padronizado (z-score). Valores baixos marcam fundos; "
+              ">6–7 marcam topos de ciclo.",
+    "nupl": "Net Unrealized Profit/Loss. <0 = mercado no prejuízo (medo/compra); "
+            ">0.75 = euforia (venda).",
+    "puell": "Puell Multiple (receita de mineradores vs média). Baixo = pressão "
+             "em mineradores (fundo); alto = topo.",
+    "reserve_risk": "Confiança vs preço. Valores baixos = ótima relação "
+                    "risco/retorno (acumulação); altos = caro.",
+}
 
 
 def score_para_sinal(score: float) -> str:
@@ -349,25 +411,38 @@ def montar_snapshot(preco: pd.DataFrame, fng_atual: float | None,
     return pd.DataFrame(linhas)
 
 
-def consolidar(snapshot: pd.DataFrame, selecionados: list[str] | None = None) -> float:
+def consolidar(snapshot: pd.DataFrame, selecionados: list[str] | None = None,
+               pesos: dict[str, float] | None = None) -> float:
     """
-    Score consolidado = média dos scores dos indicadores SELECIONADOS e
-    disponíveis. Se `selecionados` for None, usa todos os disponíveis.
+    Score consolidado = média (PONDERADA, se `pesos` for dado) dos scores dos
+    indicadores SELECIONADOS e disponíveis. Sem `selecionados`, usa todos os
+    disponíveis; sem `pesos`, peso 1 para cada (média simples).
     """
     df = snapshot[snapshot["ok"]]
     if selecionados is not None:
         df = df[df["chave"].isin(selecionados)]
     if df.empty:
         return float("nan")
-    return float(df["score"].mean())
+    if not pesos:
+        return float(df["score"].mean())
+    w = df["chave"].map(lambda c: float(pesos.get(c, 1.0)))
+    soma_w = w.sum()
+    if soma_w == 0:
+        return float("nan")
+    return float((df["score"] * w).sum() / soma_w)
 
 
 def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
-                          selecionados: list[str] | None = None) -> pd.DataFrame:
+                          selecionados: list[str] | None = None,
+                          incluir_onchain: bool = False,
+                          pesos: dict[str, float] | None = None) -> pd.DataFrame:
     """
-    Recalcula o score consolidado AO LONGO DO TEMPO usando os indicadores
-    GRÁTIS que têm série histórica (Mayer, 200W MA, RSI mensal) + Fear & Greed.
-    (On-chain entra só no snapshot atual, pois o histórico depende da API.)
+    Recalcula o score consolidado AO LONGO DO TEMPO.
+
+    Sempre usa os indicadores GRÁTIS com série (Mayer, 200W MA, RSI mensal) +
+    Fear & Greed. Se `incluir_onchain=True` e houver chave, acrescenta as
+    séries históricas dos on-chain (MVRV, SOPR, ...), cada uma via cache para
+    poupar requisições. `pesos` permite média ponderada (peso por indicador).
 
     Retorna DataFrame ['date','price','score'].
     """
@@ -380,7 +455,14 @@ def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
     if fng is not None and not fng.empty:
         series["fng"] = fng.set_index("date")["fng"].astype(float)
 
-    # Mantém só os indicadores grátis selecionados (ou todos os grátis).
+    # On-chain (opcional): cada métrica vira uma série alinhada por data.
+    if incluir_onchain and tem_chave_onchain():
+        for m in BGEO_ENDPOINTS:
+            s = serie_onchain_cache(m)
+            if not s.empty:
+                series[m] = s.set_index("date")["valor"].astype(float)
+
+    # Mantém só os indicadores selecionados (ou todos os disponíveis).
     chaves = [k for k in series
               if selecionados is None or k in selecionados]
 
@@ -389,12 +471,14 @@ def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
         df[k] = series[k].reindex(df.index, method="ffill")
 
     def _linha_score(row):
-        scores = []
+        num, den = 0.0, 0.0
         for k in chaves:
             v = row.get(k)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
-                scores.append(score_indicador(k, v))
-        return np.mean(scores) if scores else np.nan
+                w = float(pesos.get(k, 1.0)) if pesos else 1.0
+                num += score_indicador(k, v) * w
+                den += w
+        return num / den if den else np.nan
 
     df["score"] = df.apply(_linha_score, axis=1)
     out = df.reset_index()[["date", "price", "score"]].dropna(subset=["score"])
