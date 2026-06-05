@@ -34,7 +34,7 @@ USER_AGENT = "btc-mood-tracker/1.0 (educational)"
 
 # Nome da variável de ambiente onde fica a chave da BGeometrics (opcional).
 BGEO_ENV = "BGEO_API_KEY"
-BGEO_BASE = "https://bitcoin-data.com/v1"
+BGEO_BASE = "https://api.bgeometrics.com/v1"
 
 
 # ==========================================================================
@@ -83,13 +83,16 @@ def serie_rsi_mensal(preco: pd.DataFrame, periodo: int = 14) -> pd.Series:
 # 2) INDICADORES ON-CHAIN — BGeometrics / bitcoin-data.com (chave OPCIONAL)
 # ==========================================================================
 
-# Mapeia o "nome amigável" -> caminho do endpoint na API da BGeometrics.
-# (Os nomes podem variar conforme a doc; ajuste aqui se necessário.)
+# Mapeia o "nome amigável" -> caminho do endpoint REAL da API bgeometrics.com.
+# (CVDD/RHODL não existem nessa API; usamos os indicadores on-chain que ela
+#  realmente oferece — todos clássicos de ciclo de mercado.)
 BGEO_ENDPOINTS = {
     "mvrv": "mvrv",
     "sopr": "sopr",
-    "cvdd": "cvdd",
-    "rhodl": "rhodl-ratio",
+    "mvrv_z": "mvrv-zscore",
+    "nupl": "nupl",
+    "puell": "puell-multiple",
+    "reserve_risk": "reserve-risk",
 }
 
 
@@ -114,17 +117,20 @@ def fetch_onchain_bgeometrics(metrica: str) -> float:
         return float("nan")
 
     endpoint = BGEO_ENDPOINTS.get(metrica, metrica)
+    # A bgeometrics.com autentica via query param ?token=... (não header).
     url = f"{BGEO_BASE}/{endpoint}"
     try:
-        r = requests.get(url, timeout=HTTP_TIMEOUT,
-                         headers={"User-Agent": USER_AGENT, "x-api-key": chave})
+        r = requests.get(url, params={"token": chave}, timeout=HTTP_TIMEOUT,
+                         headers={"User-Agent": USER_AGENT})
         r.raise_for_status()
         dados = r.json()
     except Exception as e:
         print(f"[BGeo {metrica}] indisponível: {e}")
         return float("nan")
 
-    # A resposta pode ser lista de dicts ou um dict. Extraímos o último número.
+    # A resposta é um histórico (lista de dicts), tipo:
+    #   [{"d": "2024-01-01", "unixTs": "...", "mvrv": "1.23"}, ...]
+    # Pegamos o último registro e o seu campo numérico (ignorando data/ts).
     registros = dados if isinstance(dados, list) else dados.get("data", [])
     if not isinstance(registros, list) or not registros:
         return float("nan")
@@ -132,9 +138,8 @@ def fetch_onchain_bgeometrics(metrica: str) -> float:
     for reg in reversed(registros):
         if not isinstance(reg, dict):
             continue
-        # Procura qualquer campo numérico que não seja data/timestamp.
         for k, v in reg.items():
-            if k.lower() in ("d", "date", "unixts", "timestamp", "t"):
+            if k.lower() in ("d", "date", "unixts", "unix_ts", "timestamp", "t"):
                 continue
             try:
                 return float(v)
@@ -166,25 +171,30 @@ def _score_por_faixas(valor: float, faixas: list[tuple[float, int]]) -> int:
 # Faixas de score por indicador (calibradas de forma didática/conservadora).
 # Quanto menor o valor "barato", maior o score de COMPRA (+2).
 FAIXAS = {
+    # --- Grátis (do preço) ---
     "mayer":      [(0.8, 2), (1.0, 1), (1.5, 0), (2.4, -1), (float("inf"), -2)],
     "ma200w":     [(1.0, 2), (1.5, 1), (3.0, 0), (5.0, -1), (float("inf"), -2)],
     "rsi_mensal": [(30, 2), (45, 1), (60, 0), (70, -1), (float("inf"), -2)],
     "fng":        [(20, 2), (40, 1), (60, 0), (80, -1), (float("inf"), -2)],
-    "mvrv":       [(1.0, 2), (1.5, 1), (2.5, 0), (3.5, -1), (float("inf"), -2)],
-    "sopr":       [(0.95, 2), (1.0, 1), (1.02, 0), (1.05, -1), (float("inf"), -2)],
-    "cvdd":       [(1.0, 2), (1.5, 1), (2.5, 0), (4.0, -1), (float("inf"), -2)],
-    "rhodl":      [(0.3, 2), (0.6, 1), (1.0, 0), (2.5, -1), (float("inf"), -2)],
+    # --- On-chain (bgeometrics) ---
+    "mvrv":         [(1.0, 2), (1.5, 1), (2.5, 0), (3.5, -1), (float("inf"), -2)],
+    "sopr":         [(0.95, 2), (1.0, 1), (1.02, 0), (1.05, -1), (float("inf"), -2)],
+    "mvrv_z":       [(0.0, 2), (2.0, 1), (4.0, 0), (6.0, -1), (float("inf"), -2)],
+    "nupl":         [(0.0, 2), (0.25, 1), (0.5, 0), (0.75, -1), (float("inf"), -2)],
+    "puell":        [(0.5, 2), (1.0, 1), (2.0, 0), (4.0, -1), (float("inf"), -2)],
+    "reserve_risk": [(0.002, 2), (0.005, 1), (0.01, 0), (0.02, -1), (float("inf"), -2)],
 }
 
 # Rótulos legíveis e nomes de exibição.
 NOMES = {
     "mayer": "Mayer Multiple", "ma200w": "200W MA Ratio",
     "rsi_mensal": "RSI Mensal", "fng": "Fear & Greed",
-    "mvrv": "MVRV Ratio", "sopr": "SOPR", "cvdd": "CVDD", "rhodl": "RHODL Ratio",
+    "mvrv": "MVRV Ratio", "sopr": "SOPR", "mvrv_z": "MVRV Z-Score",
+    "nupl": "NUPL", "puell": "Puell Multiple", "reserve_risk": "Reserve Risk",
 }
 
-# Quais indicadores são on-chain (precisam de chave).
-ONCHAIN = {"mvrv", "sopr", "cvdd", "rhodl"}
+# Quais indicadores são on-chain (precisam de chave). Espelha BGEO_ENDPOINTS.
+ONCHAIN = {"mvrv", "sopr", "mvrv_z", "nupl", "puell", "reserve_risk"}
 
 
 def score_para_sinal(score: float) -> str:
@@ -232,7 +242,7 @@ def montar_snapshot(preco: pd.DataFrame, fng_atual: float | None,
 
     # --- On-chain (chave opcional) ---
     if incluir_onchain and tem_chave_onchain():
-        for m in ("mvrv", "sopr", "cvdd", "rhodl"):
+        for m in BGEO_ENDPOINTS:  # mvrv, sopr, mvrv_z, nupl, puell, reserve_risk
             valores[m] = fetch_onchain_bgeometrics(m)
 
     linhas = []

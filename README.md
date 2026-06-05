@@ -30,7 +30,7 @@ preço) e visualizar tudo de forma clara.
 | Atenção | **Google Trends** (via `pytrends`) | termo "Bitcoin" | *Opcional* — pode tomar rate limit (429) |
 | Texto p/ IA | **Reddit** | `reddit.com/r/<sub>/new.json` | Precisa header `User-Agent`; só posts recentes |
 | Texto p/ IA (fallback) | **CryptoCompare News** | `min-api.cryptocompare.com/data/v2/news/` | Usado quando o Reddit bloqueia datacenters (na nuvem); grátis, sem chave |
-| On-chain (opcional) | **BGeometrics** (bitcoin-data.com) | `bitcoin-data.com/v1/<metrica>` | MVRV, SOPR, CVDD, RHODL. **Chave grátis** via `BGEO_API_KEY` (ver abaixo) |
+| On-chain (opcional) | **BGeometrics** (bitcoin-data.com) | `api.bgeometrics.com/v1/<metrica>?token=...` | MVRV, SOPR, MVRV Z-Score, NUPL, Puell, Reserve Risk. **Chave grátis** via `BGEO_API_KEY` (ver abaixo) |
 
 ---
 
@@ -43,8 +43,9 @@ selecionados (com checkboxes para escolher quais entram).
 
 - **Indicadores grátis, sem chave** (calculados do preço): Mayer Multiple,
   200W MA Ratio, RSI mensal, e o Fear & Greed.
-- **Indicadores on-chain (opcionais)**: MVRV, SOPR, CVDD, RHODL — via
-  **BGeometrics** (bitcoin-data.com). Só aparecem se você definir a chave.
+- **Indicadores on-chain (opcionais)**: MVRV, SOPR, MVRV Z-Score, NUPL,
+  Puell Multiple, Reserve Risk — via **BGeometrics** (`api.bgeometrics.com`).
+  Só aparecem se você definir a chave.
 
 ### Como ativar os indicadores on-chain
 1. Crie uma conta grátis em **https://bitcoin-data.com/** e gere sua API key
