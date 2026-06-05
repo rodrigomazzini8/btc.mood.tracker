@@ -153,16 +153,70 @@ def fetch_btc_coingecko(dias: int = 365) -> pd.DataFrame:
     return df[["date", "price"]].reset_index(drop=True)
 
 
+def fetch_btc_cryptocompare(dias: int = 1500) -> pd.DataFrame:
+    """
+    Baixa o preço diário do BTC na CryptoCompare (grátis, sem chave).
+
+    Vantagem sobre a CoinGecko como FALLBACK de nuvem: a CryptoCompare libera
+    servidores de datacenter E entrega HISTÓRICO LONGO (~2000 dias por
+    requisição), essencial para indicadores como 200W MA Ratio (200 semanas)
+    e RSI mensal, que precisam de muitos dias.
+
+    Retorna DataFrame ['date', 'price'] ou vazio em caso de erro.
+    """
+    url = "https://min-api.cryptocompare.com/data/v2/histoday"
+    # limit é nº de pontos ALÉM do mais recente; a API aceita até ~2000.
+    limit = max(1, min(int(dias), 2000))
+    params = {"fsym": "BTC", "tsym": "USD", "limit": limit}
+    try:
+        r = requests.get(url, params=params, timeout=HTTP_TIMEOUT,
+                         headers={"User-Agent": USER_AGENT})
+        r.raise_for_status()
+        payload = r.json()
+        pontos = payload.get("Data", {}).get("Data", [])
+    except Exception as e:
+        print(f"[CryptoCompare preço] Falha: {e}")
+        return pd.DataFrame(columns=["date", "price"])
+
+    if not isinstance(pontos, list) or not pontos:
+        return pd.DataFrame(columns=["date", "price"])
+
+    linhas = []
+    for p in pontos:
+        if not isinstance(p, dict):
+            continue
+        ts = p.get("time")
+        close = p.get("close")
+        if ts is None or close in (None, 0):
+            continue
+        linhas.append({"date": pd.to_datetime(ts, unit="s").normalize(),
+                       "price": float(close)})
+
+    if not linhas:
+        return pd.DataFrame(columns=["date", "price"])
+    return (pd.DataFrame(linhas).drop_duplicates("date")
+            .sort_values("date").reset_index(drop=True))
+
+
 def fetch_btc_price(dias: int = 1500, symbol: str = "BTCUSDT") -> pd.DataFrame:
     """
-    Preço do BTC com FALLBACK robusto: tenta a Binance (histórico longo,
-    ótima localmente) e, se falhar/vier vazia (ex.: bloqueio 451 na nuvem),
-    cai para a CoinGecko. Use ESTA função no lugar de chamar a Binance direto.
+    Preço do BTC com FALLBACK robusto, em cascata:
+      1) Binance — histórico longo, ótima localmente;
+      2) CryptoCompare — funciona na NUVEM e dá histórico longo (~2000 dias),
+         necessário p/ 200W MA Ratio e RSI mensal;
+      3) CoinGecko — último recurso (limitada a ~365 dias no tier grátis).
+    Use ESTA função no lugar de chamar a Binance direto.
     """
     df = fetch_btc_binance(dias=dias, symbol=symbol)
     if not df.empty:
         return df
-    print("[Preço] Binance indisponível — tentando CoinGecko...")
+
+    print("[Preço] Binance indisponível — tentando CryptoCompare...")
+    df = fetch_btc_cryptocompare(dias=dias)
+    if not df.empty:
+        return df
+
+    print("[Preço] CryptoCompare indisponível — tentando CoinGecko...")
     return fetch_btc_coingecko(dias=dias)
 
 
