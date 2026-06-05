@@ -295,9 +295,12 @@ if not onchain.empty:
         _render_indicador(cols_o[i % len(cols_o)], row)
 
 # Explicação didática de cada indicador.
+# getattr defensivo: se um módulo antigo estiver em cache na nuvem (sem
+# EXPLICACOES), não quebra — apenas omite as descrições.
+_explic = getattr(term, "EXPLICACOES", {})
 with st.expander("ℹ️ O que significa cada indicador?"):
     for r in snapshot.itertuples():
-        exp = term.EXPLICACOES.get(r.chave, "")
+        exp = _explic.get(r.chave, "")
         if exp:
             st.markdown(f"**{r.indicador}** — {exp}")
 
