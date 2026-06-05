@@ -96,23 +96,44 @@ BGEO_ENDPOINTS = {
 }
 
 
+def _ler_chave() -> str:
+    """
+    Lê a chave da BGeometrics de forma robusta, em duas fontes:
+      1) variável de ambiente BGEO_API_KEY (local, HF Spaces, etc.);
+      2) st.secrets["BGEO_API_KEY"] (Streamlit Cloud → Settings → Secrets),
+         pois lá o secret nem sempre vira variável de ambiente.
+    Devolve "" se não houver chave em lugar nenhum.
+    """
+    val = os.environ.get(BGEO_ENV, "").strip()
+    if val:
+        return val
+    # st.secrets só existe quando rodando dentro do Streamlit.
+    try:
+        import streamlit as st
+        if BGEO_ENV in st.secrets:
+            return str(st.secrets[BGEO_ENV]).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def tem_chave_onchain() -> bool:
-    """True se a variável de ambiente com a chave da BGeometrics existir."""
-    return bool(os.environ.get(BGEO_ENV, "").strip())
+    """True se houver chave da BGeometrics (env var ou st.secrets)."""
+    return bool(_ler_chave())
 
 
 def fetch_onchain_bgeometrics(metrica: str) -> float:
     """
     Busca o ÚLTIMO valor de uma métrica on-chain na BGeometrics.
 
-    Requer a chave em os.environ[BGEO_ENV]. Sem chave, devolve NaN.
+    Lê a chave de BGEO_API_KEY (env var ou st.secrets). Sem chave, NaN.
     É defensivo: qualquer falha (rede, formato, rate limit) vira NaN, então
     o indicador apenas fica "indisponível" sem derrubar o app.
 
     A API devolve um histórico tipo [{"d": "2024-01-01", "<metrica>": "1.23"},
     ...]; pegamos o último ponto com valor numérico.
     """
-    chave = os.environ.get(BGEO_ENV, "").strip()
+    chave = _ler_chave()
     if not chave:
         return float("nan")
 
