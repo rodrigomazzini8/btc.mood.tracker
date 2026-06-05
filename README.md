@@ -21,7 +21,7 @@ preço) e visualizar tudo de forma clara.
 
 ---
 
-## 🔌 Fontes de dados (todas grátis, sem chave)
+## 🔌 Fontes de dados (grátis; on-chain com chave grátis opcional)
 
 | Sinal | Fonte | Endpoint | Observação |
 |-------|-------|----------|-----------|
@@ -30,6 +30,39 @@ preço) e visualizar tudo de forma clara.
 | Atenção | **Google Trends** (via `pytrends`) | termo "Bitcoin" | *Opcional* — pode tomar rate limit (429) |
 | Texto p/ IA | **Reddit** | `reddit.com/r/<sub>/new.json` | Precisa header `User-Agent`; só posts recentes |
 | Texto p/ IA (fallback) | **CryptoCompare News** | `min-api.cryptocompare.com/data/v2/news/` | Usado quando o Reddit bloqueia datacenters (na nuvem); grátis, sem chave |
+| On-chain (opcional) | **BGeometrics** (bitcoin-data.com) | `bitcoin-data.com/v1/<metrica>` | MVRV, SOPR, CVDD, RHODL. **Chave grátis** via `BGEO_API_KEY` (ver abaixo) |
+
+---
+
+## 🌡️ Termômetro do Bitcoin (score consolidado)
+
+Inspirado em dashboards de sinais, o dashboard tem uma seção **Termômetro**
+que combina vários indicadores num único **score de −2 (venda forte) a +2
+(compra forte)**. Cada indicador vira um score; o consolidado é a média dos
+selecionados (com checkboxes para escolher quais entram).
+
+- **Indicadores grátis, sem chave** (calculados do preço): Mayer Multiple,
+  200W MA Ratio, RSI mensal, e o Fear & Greed.
+- **Indicadores on-chain (opcionais)**: MVRV, SOPR, CVDD, RHODL — via
+  **BGeometrics** (bitcoin-data.com). Só aparecem se você definir a chave.
+
+### Como ativar os indicadores on-chain
+1. Crie uma conta grátis em **https://bitcoin-data.com/** e gere sua API key
+   (tier grátis; sem cartão).
+2. Exponha a chave na variável de ambiente `BGEO_API_KEY`:
+   ```bash
+   export BGEO_API_KEY="sua_chave_aqui"      # Linux/Mac
+   # setx BGEO_API_KEY "sua_chave_aqui"       # Windows
+   streamlit run dashboard.py
+   ```
+   - **Streamlit Cloud:** App → *Settings* → *Secrets* → adicione
+     `BGEO_API_KEY="..."`.
+   - **Hugging Face Spaces:** Space → *Settings* → *Variables and secrets* →
+     novo *Secret* `BGEO_API_KEY`.
+3. Sem a chave, o termômetro funciona normalmente só com os indicadores grátis.
+
+> ⚠️ Os limiares de cada indicador são didáticos/conservadores. **Não é
+> recomendação financeira.** Correlação e sinais não preveem o futuro.
 
 ---
 

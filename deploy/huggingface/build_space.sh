@@ -17,9 +17,10 @@ DEST="${1:-$RAIZ/../btc-mood-space}"
 echo ">> Montando Space em: $DEST"
 mkdir -p "$DEST/scripts"
 
-# App + módulo compartilhado (a IA/FinBERT já está no código).
-cp "$RAIZ/dashboard.py"        "$DEST/dashboard.py"
-cp "$RAIZ/scripts/common.py"   "$DEST/scripts/common.py"
+# App + módulos compartilhados (IA/FinBERT e Termômetro já estão no código).
+cp "$RAIZ/dashboard.py"          "$DEST/dashboard.py"
+cp "$RAIZ/scripts/common.py"     "$DEST/scripts/common.py"
+cp "$RAIZ/scripts/termometro.py" "$DEST/scripts/termometro.py"
 
 # Arquivos ESPECÍFICOS do Space (sobrescrevem os da raiz):
 #  - README.md com o cabeçalho YAML que o HF exige

@@ -29,6 +29,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 import common  # noqa: E402
+import termometro as term  # noqa: E402  (score consolidado estilo "termômetro")
 
 # --------------------------------------------------------------------------
 # Configuração da página
@@ -59,6 +60,21 @@ def carregar_fng() -> pd.DataFrame:
 def carregar_trends() -> pd.DataFrame:
     # Fonte opcional: se falhar, devolve vazio (não quebra o app).
     return common.fetch_google_trends(termo="Bitcoin", timeframe="today 5-y")
+
+
+@st.cache_data(ttl=3600, show_spinner="Calculando o termômetro (indicadores)...")
+def carregar_snapshot_termometro(periodo: int, fng_atual: float) -> pd.DataFrame:
+    # Usa histórico longo para os indicadores de média móvel (200d/200w).
+    preco_longo = common.fetch_btc_price(dias=1500)
+    return term.montar_snapshot(preco_longo, fng_atual=fng_atual, incluir_onchain=True)
+
+
+@st.cache_data(ttl=3600, show_spinner="Recalculando score histórico...")
+def carregar_score_historico(periodo: int, selecionados: tuple) -> pd.DataFrame:
+    preco_longo = common.fetch_btc_price(dias=1500)
+    fng_full = common.fetch_fear_greed(limit=0)
+    sel = list(selecionados) if selecionados else None
+    return term.serie_score_historico(preco_longo, fng_full, selecionados=sel)
 
 
 @st.cache_data(ttl=900, show_spinner="Buscando texto para a IA (Reddit/notícias)...")
@@ -214,8 +230,103 @@ fig.update_layout(template="plotly_dark", height=620,
 st.plotly_chart(fig, use_container_width=True)
 
 # --------------------------------------------------------------------------
+# 🌡️ TERMÔMETRO DO BITCOIN — score consolidado de compra/venda
+# --------------------------------------------------------------------------
+st.markdown("---")
+st.subheader("🌡️ Termômetro do Bitcoin")
+st.caption("Sinais de compra/venda combinando vários indicadores num score de "
+           "−2 (venda forte) a +2 (compra forte). **Não é recomendação financeira.**")
+
+snapshot = carregar_snapshot_termometro(periodo, float(fng_atual))
+
+# Cores por sinal (para os cards e a tabela).
+COR_SINAL = {
+    "COMPRA FORTE": "#1b7f4d", "COMPRA": "#26a69a", "NEUTRO": "#8a8f98",
+    "VENDA": "#ef5350", "VENDA FORTE": "#b71c1c", "—": "#444",
+}
+
+# Checkboxes: quais indicadores entram no consolidado (default: todos os ok).
+disp = snapshot[snapshot["ok"]]
+st.markdown("**Escolha os indicadores usados no cálculo:**")
+cols_chk = st.columns(4)
+selecionados = []
+for i, row in enumerate(disp.itertuples()):
+    with cols_chk[i % 4]:
+        marcado = st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}")
+    if marcado:
+        selecionados.append(row.chave)
+
+# Score consolidado dos selecionados.
+cons = term.consolidar(snapshot, selecionados or None)
+sinal_cons = term.score_para_sinal(cons) if cons == cons else "—"
+
+# Aviso se on-chain estiver indisponível (sem chave).
+if not term.tem_chave_onchain():
+    st.info("Indicadores on-chain (MVRV, SOPR, CVDD, RHODL) ficam disponíveis ao "
+            "definir a variável de ambiente `BGEO_API_KEY` (chave grátis da "
+            "bitcoin-data.com). Sem ela, o termômetro usa só os indicadores grátis.")
+
+# Card grande do sinal consolidado + métricas.
+cc1, cc2 = st.columns([1, 2])
+with cc1:
+    cor = COR_SINAL.get(sinal_cons, "#444")
+    st.markdown(
+        f"<div style='background:{cor};padding:18px;border-radius:12px;text-align:center'>"
+        f"<div style='font-size:13px;opacity:.85'>SINAL CONSOLIDADO</div>"
+        f"<div style='font-size:30px;font-weight:700'>{sinal_cons}</div>"
+        f"<div style='font-size:15px'>score: {cons:.2f}</div></div>",
+        unsafe_allow_html=True)
+with cc2:
+    st.caption("Cada indicador gera um score de −2 a +2; o consolidado é a "
+               "média dos selecionados. Valores 'baratos' historicamente "
+               "puxam para COMPRA; 'esticados' para VENDA.")
+
+# Tabela detalhada (Indicador | Valor | Sinal | Score), estilo letabuild.
+def _fmt_valor(chave, valor, ok):
+    if not ok:
+        return "indisponível"
+    if chave == "fng":
+        return f"{valor:.0f}"
+    if chave == "rsi_mensal":
+        return f"{valor:.1f}"
+    return f"{valor:.3f}"
+
+tab = snapshot.copy()
+tab["Valor"] = [_fmt_valor(r.chave, r.valor, r.ok) for r in snapshot.itertuples()]
+tab["Tipo"] = tab["onchain"].map({True: "on-chain", False: "grátis"})
+tab_show = tab.rename(columns={"indicador": "Indicador", "sinal": "Sinal",
+                               "score": "Score"})[
+    ["Indicador", "Tipo", "Valor", "Sinal", "Score"]]
+st.dataframe(tab_show, use_container_width=True, hide_index=True,
+             column_config={"Score": st.column_config.NumberColumn("Score", format="%d")})
+
+# Gráfico: score histórico (área) sobreposto ao preço.
+hist = carregar_score_historico(periodo, tuple(sorted(
+    [s for s in selecionados if s not in term.ONCHAIN])))
+if not hist.empty:
+    corte_h = hist["date"].max() - pd.Timedelta(days=periodo)
+    hist = hist[hist["date"] >= corte_h]
+    figt = make_subplots(specs=[[{"secondary_y": True}]])
+    figt.add_trace(go.Scatter(x=hist["date"], y=hist["price"], name="BTC (USD)",
+                              line=dict(color=LARANJA, width=1.6)), secondary_y=False)
+    figt.add_trace(go.Scatter(x=hist["date"], y=hist["score"], name="Score consolidado",
+                              line=dict(color="#42a5f5", width=1.4),
+                              fill="tozeroy", fillcolor="rgba(66,165,245,0.15)"),
+                   secondary_y=True)
+    figt.update_layout(template="plotly_dark", height=420,
+                       margin=dict(l=10, r=10, t=30, b=10),
+                       title="Histórico do Score × Preço do Bitcoin",
+                       legend=dict(orientation="h", y=1.1))
+    figt.update_yaxes(title_text="Preço (USD)", secondary_y=False)
+    figt.update_yaxes(title_text="Score (−2 a +2)", range=[-2.2, 2.2], secondary_y=True)
+    st.plotly_chart(figt, use_container_width=True)
+    st.caption("O score histórico usa só indicadores grátis com série temporal "
+               "(Mayer, 200W MA, RSI, Fear & Greed). On-chain entra no snapshot atual.")
+
+# --------------------------------------------------------------------------
 # Tabela de posts classificados pela IA
 # --------------------------------------------------------------------------
+st.markdown("---")
 st.subheader("🧠 Textos (Reddit ou notícias) classificados pela IA")
 st.caption("Tenta o Reddit; na nuvem ele costuma bloquear datacenters, então "
            "usa notícias de cripto (CryptoCompare) como fallback.")
