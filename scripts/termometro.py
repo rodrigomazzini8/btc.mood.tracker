@@ -23,6 +23,7 @@ IMPORTANTE: nada aqui é recomendação financeira. É um exercício didático.
 from __future__ import annotations
 
 import os
+import json
 import time
 
 import numpy as np
@@ -35,6 +36,33 @@ USER_AGENT = "btc-mood-tracker/1.0 (educational)"
 # Nome da variável de ambiente onde fica a chave da BGeometrics (opcional).
 BGEO_ENV = "BGEO_API_KEY"
 BGEO_BASE = "https://api.bgeometrics.com/v1"
+
+# Cache em disco dos valores on-chain. A BGeometrics grátis limita a ~15
+# requisições/dia, então guardamos o último valor de cada métrica e o
+# reaproveitamos quando uma chamada falhar (rate limit) ou por até CACHE_TTL.
+_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
+_ONCHAIN_CACHE = os.path.join(_CACHE_DIR, "onchain_bgeo.json")
+ONCHAIN_CACHE_TTL = 12 * 60 * 60  # 12h: valores on-chain mudam devagar
+
+
+def _cache_load() -> dict:
+    """Lê o cache on-chain do disco (dict métrica -> {'v':valor,'ts':epoch})."""
+    try:
+        with open(_ONCHAIN_CACHE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _cache_save(cache: dict) -> None:
+    """Grava o cache on-chain no disco (silencioso se não der)."""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_ONCHAIN_CACHE, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
 
 
 # ==========================================================================
@@ -124,11 +152,50 @@ def tem_chave_onchain() -> bool:
 
 def fetch_onchain_bgeometrics(metrica: str) -> float:
     """
-    Busca o ÚLTIMO valor de uma métrica on-chain na BGeometrics.
+    Valor de uma métrica on-chain COM CACHE em disco.
+
+    Estratégia para conviver com o limite de ~15 requisições/dia da
+    BGeometrics grátis (sem isso, os últimos indicadores do lote ficavam
+    rotacionando como "indisponível" por rate limit):
+      1) se há valor em cache e ele é recente (< TTL), usa o cache;
+      2) senão tenta a API; em sucesso, atualiza o cache;
+      3) se a API falhar (rate limit etc.), reaproveita o cache mesmo
+         que velho — melhor um valor de ontem do que "indisponível".
+    """
+    cache = _cache_load()
+    entrada = cache.get(metrica)
+    agora = time.time()
+
+    # 1) Cache recente -> usa direto (não gasta requisição).
+    if entrada and (agora - entrada.get("ts", 0)) < ONCHAIN_CACHE_TTL:
+        try:
+            return float(entrada["v"])
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    # 2) Tenta a API.
+    valor = _fetch_onchain_raw(metrica)
+
+    if not (isinstance(valor, float) and np.isnan(valor)):
+        cache[metrica] = {"v": valor, "ts": agora}
+        _cache_save(cache)
+        return valor
+
+    # 3) Falhou (provável rate limit) -> usa cache antigo, se houver.
+    if entrada:
+        try:
+            return float(entrada["v"])
+        except (TypeError, ValueError, KeyError):
+            pass
+    return float("nan")
+
+
+def _fetch_onchain_raw(metrica: str) -> float:
+    """
+    Busca o ÚLTIMO valor de uma métrica on-chain na BGeometrics (sem cache).
 
     Lê a chave de BGEO_API_KEY (env var ou st.secrets). Sem chave, NaN.
-    É defensivo: qualquer falha (rede, formato, rate limit) vira NaN, então
-    o indicador apenas fica "indisponível" sem derrubar o app.
+    É defensivo: qualquer falha (rede, formato, rate limit) vira NaN.
 
     A API devolve um histórico tipo [{"d": "2024-01-01", "<metrica>": "1.23"},
     ...]; pegamos o último ponto com valor numérico.
