@@ -245,41 +245,78 @@ COR_SINAL = {
     "VENDA": "#ef5350", "VENDA FORTE": "#b71c1c", "—": "#444",
 }
 
+# Aviso se on-chain estiver indisponível (sem chave).
+if not term.tem_chave_onchain():
+    st.info("Indicadores on-chain (MVRV, SOPR, MVRV Z-Score, NUPL, Puell, "
+            "Reserve Risk) ficam disponíveis ao definir a chave grátis "
+            "`BGEO_API_KEY` (api.bgeometrics.com). Sem ela, o termômetro usa "
+            "só os indicadores grátis.")
+
 # Checkboxes: quais indicadores entram no consolidado (default: todos os ok).
+# Separados em GRÁTIS e ON-CHAIN para ficar mais organizado.
 disp = snapshot[snapshot["ok"]]
 st.markdown("**Escolha os indicadores usados no cálculo:**")
-cols_chk = st.columns(4)
 selecionados = []
-for i, row in enumerate(disp.itertuples()):
-    with cols_chk[i % 4]:
-        marcado = st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}")
-    if marcado:
-        selecionados.append(row.chave)
+
+gratis = disp[~disp["onchain"]]
+onchain = disp[disp["onchain"]]
+
+if not gratis.empty:
+    st.caption("Grátis (calculados do preço)")
+    cols_g = st.columns(max(1, len(gratis)))
+    for i, row in enumerate(gratis.itertuples()):
+        with cols_g[i]:
+            if st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}"):
+                selecionados.append(row.chave)
+
+if not onchain.empty:
+    st.caption("On-chain (BGeometrics)")
+    cols_o = st.columns(min(4, len(onchain)))
+    for i, row in enumerate(onchain.itertuples()):
+        with cols_o[i % len(cols_o)]:
+            if st.checkbox(row.indicador, value=True, key=f"chk_{row.chave}"):
+                selecionados.append(row.chave)
 
 # Score consolidado dos selecionados.
 cons = term.consolidar(snapshot, selecionados or None)
 sinal_cons = term.score_para_sinal(cons) if cons == cons else "—"
+n_usados = len([s for s in selecionados if s in set(disp["chave"])])
 
-# Aviso se on-chain estiver indisponível (sem chave).
-if not term.tem_chave_onchain():
-    st.info("Indicadores on-chain (MVRV, SOPR, CVDD, RHODL) ficam disponíveis ao "
-            "definir a variável de ambiente `BGEO_API_KEY` (chave grátis da "
-            "bitcoin-data.com). Sem ela, o termômetro usa só os indicadores grátis.")
-
-# Card grande do sinal consolidado + métricas.
-cc1, cc2 = st.columns([1, 2])
+# Card grande do sinal consolidado + medidor (gauge) visual.
+cc1, cc2 = st.columns([1, 1])
 with cc1:
     cor = COR_SINAL.get(sinal_cons, "#444")
     st.markdown(
         f"<div style='background:{cor};padding:18px;border-radius:12px;text-align:center'>"
         f"<div style='font-size:13px;opacity:.85'>SINAL CONSOLIDADO</div>"
         f"<div style='font-size:30px;font-weight:700'>{sinal_cons}</div>"
-        f"<div style='font-size:15px'>score: {cons:.2f}</div></div>",
-        unsafe_allow_html=True)
-with cc2:
+        f"<div style='font-size:15px'>score: {cons:.2f}  ·  {n_usados} indicadores</div>"
+        f"</div>", unsafe_allow_html=True)
     st.caption("Cada indicador gera um score de −2 a +2; o consolidado é a "
-               "média dos selecionados. Valores 'baratos' historicamente "
-               "puxam para COMPRA; 'esticados' para VENDA.")
+               "média dos selecionados. Valores 'baratos' puxam para COMPRA; "
+               "'esticados' para VENDA.")
+with cc2:
+    # Medidor (gauge) de ponteiro do score, de -2 a +2, com zonas coloridas.
+    gauge = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=cons if cons == cons else 0,
+        number={"valueformat": ".2f", "font": {"size": 28}},
+        gauge={
+            "axis": {"range": [-2, 2], "tickvals": [-2, -1, 0, 1, 2]},
+            "bar": {"color": "rgba(255,255,255,0.85)", "thickness": 0.18},
+            "steps": [
+                {"range": [-2, -1.5], "color": "#b71c1c"},
+                {"range": [-1.5, -0.5], "color": "#ef5350"},
+                {"range": [-0.5, 0.5], "color": "#8a8f98"},
+                {"range": [0.5, 1.5], "color": "#26a69a"},
+                {"range": [1.5, 2], "color": "#1b7f4d"},
+            ],
+            "threshold": {"line": {"color": "white", "width": 3},
+                          "value": cons if cons == cons else 0},
+        }))
+    gauge.update_layout(template="plotly_dark", height=210,
+                        margin=dict(l=20, r=20, t=10, b=0))
+    st.plotly_chart(gauge, use_container_width=True)
 
 # Tabela detalhada (Indicador | Valor | Sinal | Score), estilo letabuild.
 def _fmt_valor(chave, valor, ok):
@@ -297,8 +334,26 @@ tab["Tipo"] = tab["onchain"].map({True: "on-chain", False: "grátis"})
 tab_show = tab.rename(columns={"indicador": "Indicador", "sinal": "Sinal",
                                "score": "Score"})[
     ["Indicador", "Tipo", "Valor", "Sinal", "Score"]]
-st.dataframe(tab_show, use_container_width=True, hide_index=True,
-             column_config={"Score": st.column_config.NumberColumn("Score", format="%d")})
+
+# Colore a coluna "Sinal" com a cor do respectivo sinal (estilo letabuild).
+def _cor_sinal(val):
+    c = COR_SINAL.get(val, "")
+    return f"background-color:{c};color:white;font-weight:600" if c else ""
+
+styler = (tab_show.style
+          .map(_cor_sinal, subset=["Sinal"])
+          .format({"Score": lambda v: "—" if pd.isna(v) else f"{int(v):+d}"}))
+st.dataframe(styler, use_container_width=True, hide_index=True)
+
+# Resumo: quantos indicadores em cada direção (entre os disponíveis).
+ok_scores = snapshot[snapshot["ok"]]["score"].dropna()
+n_compra = int((ok_scores > 0).sum())
+n_venda = int((ok_scores < 0).sum())
+n_neutro = int((ok_scores == 0).sum())
+rc1, rc2, rc3 = st.columns(3)
+rc1.metric("🟢 Compra", n_compra)
+rc2.metric("⚪ Neutro", n_neutro)
+rc3.metric("🔴 Venda", n_venda)
 
 # Gráfico: score histórico (área) sobreposto ao preço.
 hist = carregar_score_historico(periodo, tuple(sorted(
