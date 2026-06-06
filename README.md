@@ -193,7 +193,7 @@ Observações:
 
 - [ ] Mais fontes de humor (funding rate, dominância, volume on-chain).
 - [ ] Persistir o histórico do Reddit ao longo do tempo (banco local).
-- [ ] Backtest simples de estratégias baseadas em humor (com aviso de risco).
+- [x] Backtest simples de estratégias baseadas no score (com aviso de risco).
 - [ ] Exportar relatórios (PDF/HTML) a partir do dashboard.
 - [ ] Mais idiomas no sentimento (modelos multilíngues).
 

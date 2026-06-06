@@ -500,3 +500,68 @@ def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
     df["score"] = df.apply(_linha_score, axis=1)
     out = df.reset_index()[["date", "price", "score"]].dropna(subset=["score"])
     return out.reset_index(drop=True)
+
+
+# ==========================================================================
+# 5) BACKTEST — como uma estratégia baseada no score teria se saído
+# ==========================================================================
+
+def backtest_score(hist: pd.DataFrame, entrar: float = 0.5,
+                   sair: float = -0.5) -> dict:
+    """
+    Backtest didático de uma estratégia LONG/CASH guiada pelo score consolidado.
+
+    Regra (simples, sem alavancagem nem custos):
+      - Score >= `entrar`  -> fica COMPRADO (exposto ao BTC);
+      - Score <= `sair`    -> fica em CAIXA (fora do mercado);
+      - Entre os dois       -> mantém a posição anterior (histerese, evita
+                               ficar trocando à toa perto de zero).
+    A decisão usa o score de ONTEM aplicada ao retorno de HOJE (sem look-ahead).
+
+    Compara com "buy & hold" (comprar e segurar). Retorna um dict com a curva
+    de capital de cada estratégia e métricas (retorno total, CAGR, drawdown
+    máximo, % do tempo investido).
+
+    `hist`: DataFrame ['date','price','score'] (saída de serie_score_historico).
+    """
+    if hist is None or hist.empty or len(hist) < 30:
+        return {}
+
+    df = hist.sort_values("date").reset_index(drop=True).copy()
+    df["ret"] = df["price"].pct_change().fillna(0.0)
+
+    # Define a posição (1=comprado, 0=caixa) com histerese, usando score de ontem.
+    posicoes, atual = [], 0
+    for sc in df["score"]:
+        if sc >= entrar:
+            atual = 1
+        elif sc <= sair:
+            atual = 0
+        # senão mantém `atual`
+        posicoes.append(atual)
+    # Aplica a posição de ONTEM ao retorno de HOJE (shift evita look-ahead).
+    df["pos"] = pd.Series(posicoes).shift(1).fillna(0)
+
+    df["ret_estrategia"] = df["ret"] * df["pos"]
+    df["cap_estrategia"] = (1 + df["ret_estrategia"]).cumprod()
+    df["cap_hold"] = (1 + df["ret"]).cumprod()
+
+    def _metricas(cap: pd.Series, exposicao: float | None = None) -> dict:
+        ret_total = float(cap.iloc[-1] - 1)
+        dias = (df["date"].iloc[-1] - df["date"].iloc[0]).days or 1
+        anos = dias / 365.25
+        cagr = float(cap.iloc[-1] ** (1 / anos) - 1) if anos > 0 else float("nan")
+        pico = cap.cummax()
+        dd_max = float((cap / pico - 1).min())  # drawdown máximo (negativo)
+        m = {"ret_total": ret_total, "cagr": cagr, "dd_max": dd_max}
+        if exposicao is not None:
+            m["exposicao"] = exposicao
+        return m
+
+    return {
+        "curva": df[["date", "price", "score", "pos",
+                     "cap_estrategia", "cap_hold"]],
+        "estrategia": _metricas(df["cap_estrategia"], float(df["pos"].mean())),
+        "hold": _metricas(df["cap_hold"]),
+        "params": {"entrar": entrar, "sair": sair},
+    }

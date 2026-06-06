@@ -456,6 +456,51 @@ if not hist.empty:
                "também os on-chain) e respeita os pesos do modo avançado.")
 
 # --------------------------------------------------------------------------
+# 🧪 BACKTEST — como a estratégia do score teria se saído
+# --------------------------------------------------------------------------
+with st.expander("🧪 Backtest: e se eu seguisse o score? (didático)"):
+    st.caption("Estratégia LONG/CAIXA: fica **comprado** quando o score sobe "
+               "acima do limiar de entrada e vai para **caixa** quando cai "
+               "abaixo do de saída (decisão de ontem aplicada ao retorno de "
+               "hoje, sem custos). Comparada com comprar e segurar (buy & hold). "
+               "**Não é recomendação financeira.**")
+
+    bc1, bc2 = st.columns(2)
+    th_entrar = bc1.slider("Entrar (comprar) quando score ≥", 0.0, 2.0, 0.5, 0.25)
+    th_sair = bc2.slider("Sair (caixa) quando score ≤", -2.0, 0.0, -0.5, 0.25)
+
+    # Usa o histórico já calculado (hist), recortado ao período selecionado.
+    bt = term.backtest_score(hist, entrar=th_entrar, sair=th_sair) if not hist.empty else {}
+    if not bt:
+        st.info("Sem histórico suficiente para o backtest neste período.")
+    else:
+        e, h = bt["estrategia"], bt["hold"]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Estratégia — retorno", f"{e['ret_total']*100:+.0f}%",
+                  f"CAGR {e['cagr']*100:.0f}%")
+        m2.metric("Buy & Hold — retorno", f"{h['ret_total']*100:+.0f}%",
+                  f"CAGR {h['cagr']*100:.0f}%")
+        m3.metric("Drawdown estratégia", f"{e['dd_max']*100:.0f}%",
+                  f"hold {h['dd_max']*100:.0f}%", delta_color="off")
+        m4.metric("Tempo investido", f"{e.get('exposicao',0)*100:.0f}%")
+
+        curva = bt["curva"]
+        figb = go.Figure()
+        figb.add_trace(go.Scatter(x=curva["date"], y=curva["cap_estrategia"],
+                                  name="Estratégia (score)", line=dict(color=VERDE, width=1.8)))
+        figb.add_trace(go.Scatter(x=curva["date"], y=curva["cap_hold"],
+                                  name="Buy & Hold", line=dict(color=LARANJA, width=1.6)))
+        figb.update_layout(template="plotly_dark", height=360,
+                           margin=dict(l=10, r=10, t=30, b=10),
+                           title="Capital acumulado (1 = início do período)",
+                           legend=dict(orientation="h", y=1.12),
+                           yaxis_title="Múltiplo do capital")
+        st.plotly_chart(figb, use_container_width=True)
+        st.caption("⚠️ Resultado passado e simplificado (sem taxas, slippage ou "
+                   "impostos) — **não prevê** o futuro nem é conselho de "
+                   "investimento. Serve só para entender o comportamento do score.")
+
+# --------------------------------------------------------------------------
 # Tabela de posts classificados pela IA
 # --------------------------------------------------------------------------
 st.markdown("---")
