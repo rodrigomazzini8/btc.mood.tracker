@@ -45,6 +45,9 @@ _CACHE_DIR = os.path.join(
 _ONCHAIN_CACHE = os.path.join(_CACHE_DIR, "onchain_bgeo.json")
 ONCHAIN_CACHE_TTL = 12 * 60 * 60  # 12h: valores on-chain mudam devagar
 
+# Log diário do score consolidado (histórico próprio, 1 linha por dia).
+_LOG_DIARIO = os.path.join(_CACHE_DIR, "score_log.csv")
+
 
 def _cache_load() -> dict:
     """Lê o cache on-chain do disco (dict métrica -> {'v':valor,'ts':epoch})."""
@@ -546,22 +549,103 @@ def backtest_score(hist: pd.DataFrame, entrar: float = 0.5,
     df["cap_estrategia"] = (1 + df["ret_estrategia"]).cumprod()
     df["cap_hold"] = (1 + df["ret"]).cumprod()
 
-    def _metricas(cap: pd.Series, exposicao: float | None = None) -> dict:
+    def _metricas(cap: pd.Series, rets: pd.Series,
+                  exposicao: float | None = None) -> dict:
         ret_total = float(cap.iloc[-1] - 1)
         dias = (df["date"].iloc[-1] - df["date"].iloc[0]).days or 1
         anos = dias / 365.25
         cagr = float(cap.iloc[-1] ** (1 / anos) - 1) if anos > 0 else float("nan")
         pico = cap.cummax()
         dd_max = float((cap / pico - 1).min())  # drawdown máximo (negativo)
-        m = {"ret_total": ret_total, "cagr": cagr, "dd_max": dd_max}
+        # Sharpe anualizado (sem taxa livre de risco), base diária.
+        sd = rets.std()
+        sharpe = float(rets.mean() / sd * np.sqrt(365)) if sd > 0 else float("nan")
+        m = {"ret_total": ret_total, "cagr": cagr, "dd_max": dd_max,
+             "sharpe": sharpe}
         if exposicao is not None:
             m["exposicao"] = exposicao
         return m
 
+    # Nº de operações = quantas vezes a posição mudou (0->1 ou 1->0).
+    trocas = int((df["pos"].diff().fillna(0) != 0).sum())
+    n_compras = int(((df["pos"].diff() == 1)).sum())
+
+    # Win rate: entre as "viagens" compradas, quantas terminaram no lucro.
+    ganhos, trades = 0, 0
+    em_posicao = False
+    cap_entrada = 1.0
+    for _, r in df.iterrows():
+        if r["pos"] == 1 and not em_posicao:
+            em_posicao = True
+            cap_entrada = r["cap_estrategia"]
+        elif r["pos"] == 0 and em_posicao:
+            em_posicao = False
+            trades += 1
+            if r["cap_estrategia"] > cap_entrada:
+                ganhos += 1
+    if em_posicao:  # posição ainda aberta no fim
+        trades += 1
+        if df["cap_estrategia"].iloc[-1] > cap_entrada:
+            ganhos += 1
+    win_rate = (ganhos / trades) if trades else float("nan")
+
+    met_estrat = _metricas(df["cap_estrategia"], df["ret_estrategia"],
+                           float(df["pos"].mean()))
+    met_estrat.update({"trocas": trocas, "operacoes": n_compras,
+                       "win_rate": win_rate})
+
     return {
         "curva": df[["date", "price", "score", "pos",
                      "cap_estrategia", "cap_hold"]],
-        "estrategia": _metricas(df["cap_estrategia"], float(df["pos"].mean())),
-        "hold": _metricas(df["cap_hold"]),
+        "estrategia": met_estrat,
+        "hold": _metricas(df["cap_hold"], df["ret"]),
         "params": {"entrar": entrar, "sair": sair},
     }
+
+
+# ==========================================================================
+# 6) LOG DIÁRIO — histórico próprio do score (1 linha por dia em CSV)
+# ==========================================================================
+
+def registrar_log_diario(preco_atual: float, fng_atual: float,
+                         score: float, sinal: str) -> pd.DataFrame:
+    """
+    Acrescenta (ou atualiza) a linha do DIA de hoje no log de score.
+
+    Mantém 1 registro por dia (se rodar várias vezes no mesmo dia, sobrescreve
+    a linha de hoje). Permite acompanhar a evolução real dos sinais ao longo do
+    tempo — algo que as APIs não dão (elas só têm os indicadores, não o nosso
+    score consolidado já calculado).
+
+    Retorna o DataFrame completo do log ['date','price','fng','score','sinal'].
+    Nunca quebra: em erro de I/O, devolve ao menos a linha de hoje.
+    """
+    hoje = pd.Timestamp.now().normalize()
+    nova = {"date": hoje, "price": float(preco_atual),
+            "fng": float(fng_atual) if fng_atual is not None else float("nan"),
+            "score": float(score) if score == score else float("nan"),
+            "sinal": sinal}
+
+    log = ler_log_diario()
+    if not log.empty:
+        log = log[log["date"] != hoje]  # remove a linha de hoje, se existir
+    log = pd.concat([log, pd.DataFrame([nova])], ignore_index=True)
+    log = log.sort_values("date").reset_index(drop=True)
+
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        log.to_csv(_LOG_DIARIO, index=False)
+    except Exception as e:
+        print(f"[log diário] não foi possível salvar: {e}")
+    return log
+
+
+def ler_log_diario() -> pd.DataFrame:
+    """Lê o log diário do score (vazio se ainda não existe)."""
+    try:
+        if os.path.exists(_LOG_DIARIO):
+            df = pd.read_csv(_LOG_DIARIO, parse_dates=["date"])
+            return df.sort_values("date").reset_index(drop=True)
+    except Exception:
+        pass
+    return pd.DataFrame(columns=["date", "price", "fng", "score", "sinal"])

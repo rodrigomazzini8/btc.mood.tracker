@@ -191,9 +191,12 @@ Observações:
 
 ## 🗺️ Roadmap
 
-- [ ] Mais fontes de humor (funding rate, dominância, volume on-chain).
-- [ ] Persistir o histórico do Reddit ao longo do tempo (banco local).
-- [x] Backtest simples de estratégias baseadas no score (com aviso de risco).
+- [x] Indicadores on-chain no Termômetro (MVRV, SOPR, NUPL, Puell, etc.).
+- [x] Backtest da estratégia do score (Sharpe, win rate, drawdown, nº de ops).
+- [x] Header de destaque com preço, variação 24h e sinal do termômetro.
+- [x] Histórico próprio: log diário do score (1 linha/dia) com gráfico.
+- [x] Alertas visuais de zona (COMPRA FORTE / VENDA FORTE).
+- [ ] Mais fontes de humor (funding rate, dominância).
 - [ ] Exportar relatórios (PDF/HTML) a partir do dashboard.
 - [ ] Mais idiomas no sentimento (modelos multilíngues).
 

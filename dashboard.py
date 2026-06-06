@@ -207,6 +207,10 @@ st.sidebar.caption("Fontes grátis, sem chave de API.\n\n⚠️ Não é recomend
 st.title("📈 BTC Mood Tracker")
 st.caption("Cruzando o preço do Bitcoin com o humor do mercado — só com dados grátis.")
 
+# Header de destaque (preço + variação 24h + sinal do termômetro). É um
+# placeholder preenchido mais abaixo, quando o score já estiver calculado.
+header_box = st.empty()
+
 # Dados base (preço + humor).
 preco = carregar_preco(periodo)
 fng = carregar_fng()
@@ -353,6 +357,44 @@ cons = term.consolidar(snapshot, selecionados or None, pesos=pesos_ativos)
 sinal_cons = term.score_para_sinal(cons) if cons == cons else "—"
 n_usados = len([s for s in selecionados if s in set(disp["chave"])])
 
+# --- Preenche o HEADER de destaque (preço grande + variação 24h + sinal) ---
+preco_atual = float(preco["price"].iloc[-1])
+var24 = ((preco["price"].iloc[-1] / preco["price"].iloc[-2] - 1) * 100
+         if len(preco) > 1 else 0.0)
+cor_hdr = COR_SINAL.get(sinal_cons, "#444")
+cor_var = VERDE if var24 >= 0 else VERMELHO
+with header_box.container():
+    h1, h2 = st.columns([3, 2])
+    with h1:
+        st.markdown(
+            f"<div style='font-size:13px;opacity:.7'>BITCOIN · BTC/USD</div>"
+            f"<div style='font-size:40px;font-weight:800;line-height:1.1'>"
+            f"${preco_atual:,.0f}</div>"
+            f"<div style='font-size:16px;color:{cor_var}'>{var24:+.2f}% (24h)</div>",
+            unsafe_allow_html=True)
+    with h2:
+        st.markdown(
+            f"<div style='background:{cor_hdr};padding:14px;border-radius:12px;"
+            f"text-align:center;margin-top:6px'>"
+            f"<div style='font-size:12px;opacity:.85'>TERMÔMETRO</div>"
+            f"<div style='font-size:24px;font-weight:700'>{sinal_cons}</div>"
+            f"<div style='font-size:14px'>score {cons:.2f}</div></div>",
+            unsafe_allow_html=True)
+
+# --- ALERTA de zona extrema (COMPRA FORTE / VENDA FORTE) ---
+if sinal_cons == "COMPRA FORTE":
+    st.success(f"🟢 **Sinal de COMPRA FORTE** (score {cons:.2f}). Zona "
+               "historicamente de acumulação. *Não é recomendação financeira.*")
+elif sinal_cons == "VENDA FORTE":
+    st.error(f"🔴 **Sinal de VENDA FORTE** (score {cons:.2f}). Zona "
+             "historicamente esticada. *Não é recomendação financeira.*")
+
+# --- LOG diário do score (histórico próprio, 1 linha/dia) ---
+try:
+    term.registrar_log_diario(preco_atual, float(fng_atual), cons, sinal_cons)
+except Exception as _e:
+    pass
+
 # Card grande do sinal consolidado + medidor (gauge) visual.
 cc1, cc2 = st.columns([1, 1])
 with cc1:
@@ -484,6 +526,18 @@ with st.expander("🧪 Backtest: e se eu seguisse o score? (didático)"):
                   f"hold {h['dd_max']*100:.0f}%", delta_color="off")
         m4.metric("Tempo investido", f"{e.get('exposicao',0)*100:.0f}%")
 
+        # Segunda linha de métricas (risco/operações).
+        wr = e.get("win_rate", float("nan"))
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Sharpe estratégia", f"{e['sharpe']:.2f}",
+                  f"hold {h['sharpe']:.2f}", delta_color="off")
+        s2.metric("Operações", f"{e.get('operacoes', 0)}")
+        s3.metric("Win rate", "—" if wr != wr else f"{wr*100:.0f}%")
+        venceu = e["ret_total"] > h["ret_total"]
+        s4.metric("Estratégia vs Hold", "ganhou" if venceu else "perdeu",
+                  f"{(e['ret_total']-h['ret_total'])*100:+.0f} p.p.",
+                  delta_color="normal" if venceu else "inverse")
+
         curva = bt["curva"]
         figb = go.Figure()
         figb.add_trace(go.Scatter(x=curva["date"], y=curva["cap_estrategia"],
@@ -499,6 +553,25 @@ with st.expander("🧪 Backtest: e se eu seguisse o score? (didático)"):
         st.caption("⚠️ Resultado passado e simplificado (sem taxas, slippage ou "
                    "impostos) — **não prevê** o futuro nem é conselho de "
                    "investimento. Serve só para entender o comportamento do score.")
+
+# --- Evolução do log diário (histórico próprio do score) ---
+log = term.ler_log_diario()
+if len(log) >= 2:
+    with st.expander(f"📅 Meu histórico de sinais ({len(log)} dias registrados)"):
+        st.caption("Registro próprio: cada vez que você abre o app, ele guarda "
+                   "o score e o sinal do dia. Vai crescendo com o uso.")
+        figl = make_subplots(specs=[[{"secondary_y": True}]])
+        figl.add_trace(go.Scatter(x=log["date"], y=log["price"], name="BTC (USD)",
+                                  line=dict(color=LARANJA, width=1.6)), secondary_y=False)
+        figl.add_trace(go.Scatter(x=log["date"], y=log["score"], name="Score",
+                                  mode="lines+markers",
+                                  line=dict(color="#42a5f5", width=1.4)), secondary_y=True)
+        figl.update_layout(template="plotly_dark", height=300,
+                           margin=dict(l=10, r=10, t=10, b=10),
+                           legend=dict(orientation="h", y=1.15))
+        figl.update_yaxes(title_text="Preço", secondary_y=False)
+        figl.update_yaxes(title_text="Score", range=[-2.2, 2.2], secondary_y=True)
+        st.plotly_chart(figl, use_container_width=True)
 
 # --------------------------------------------------------------------------
 # Tabela de posts classificados pela IA
