@@ -47,6 +47,12 @@ selecionados (com checkboxes para escolher quais entram).
   Puell Multiple, Reserve Risk — via **BGeometrics** (`api.bgeometrics.com`).
   Só aparecem se você definir a chave.
 
+Recursos do termômetro: medidor (gauge) do score, tabela colorida por sinal,
+contadores Compra/Neutro/Venda, expander explicando cada indicador, escolha
+dos indicadores por checkbox, modo avançado com **pesos** por indicador e
+gráfico do **score histórico × preço** (inclui on-chain). Os valores on-chain
+são buscados 1×/dia e cacheados em memória (poupa a cota grátis da API).
+
 ### Como ativar os indicadores on-chain
 1. Crie uma conta grátis em **https://bitcoin-data.com/** e gere sua API key
    (tier grátis; sem cartão).
