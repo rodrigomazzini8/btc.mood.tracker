@@ -370,11 +370,17 @@ def score_indicador(chave: str, valor: float) -> int:
 # ==========================================================================
 
 def montar_snapshot(preco: pd.DataFrame, fng_atual: float | None,
-                    incluir_onchain: bool = True) -> pd.DataFrame:
+                    incluir_onchain: bool = True,
+                    valores_onchain: dict | None = None) -> pd.DataFrame:
     """
     Monta a tabela do termômetro com o valor ATUAL de cada indicador, seu
     sinal e score. Indicadores indisponíveis (NaN) são marcados e não entram
     no consolidado.
+
+    `valores_onchain`: se fornecido (dict chave->valor), usa esses valores em
+    vez de buscar na API — útil para passar valores já cacheados pelo Streamlit
+    (cujo cache em memória sobrevive a reruns, ao contrário do cache em disco
+    que é apagado no Streamlit Cloud).
 
     Retorna DataFrame com colunas:
         ['chave', 'indicador', 'valor', 'sinal', 'score', 'onchain', 'ok']
@@ -391,7 +397,11 @@ def montar_snapshot(preco: pd.DataFrame, fng_atual: float | None,
     valores["fng"] = float(fng_atual) if fng_atual is not None else float("nan")
 
     # --- On-chain (chave opcional) ---
-    if incluir_onchain and tem_chave_onchain():
+    if valores_onchain is not None:
+        # Valores já buscados (ex.: cache em memória do Streamlit).
+        for m in BGEO_ENDPOINTS:
+            valores[m] = valores_onchain.get(m, float("nan"))
+    elif incluir_onchain and tem_chave_onchain():
         for m in BGEO_ENDPOINTS:  # mvrv, sopr, mvrv_z, nupl, puell, reserve_risk
             valores[m] = fetch_onchain_bgeometrics(m)
 
@@ -435,14 +445,17 @@ def consolidar(snapshot: pd.DataFrame, selecionados: list[str] | None = None,
 def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
                           selecionados: list[str] | None = None,
                           incluir_onchain: bool = False,
-                          pesos: dict[str, float] | None = None) -> pd.DataFrame:
+                          pesos: dict[str, float] | None = None,
+                          series_onchain: dict | None = None) -> pd.DataFrame:
     """
     Recalcula o score consolidado AO LONGO DO TEMPO.
 
     Sempre usa os indicadores GRÁTIS com série (Mayer, 200W MA, RSI mensal) +
-    Fear & Greed. Se `incluir_onchain=True` e houver chave, acrescenta as
-    séries históricas dos on-chain (MVRV, SOPR, ...), cada uma via cache para
-    poupar requisições. `pesos` permite média ponderada (peso por indicador).
+    Fear & Greed. Para os on-chain:
+      - se `series_onchain` (dict metrica->DataFrame['date','valor']) for dado,
+        usa essas séries já buscadas (ex.: cache em memória do Streamlit);
+      - senão, se `incluir_onchain=True` e houver chave, busca via cache.
+    `pesos` permite média ponderada (peso por indicador).
 
     Retorna DataFrame ['date','price','score'].
     """
@@ -455,8 +468,12 @@ def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
     if fng is not None and not fng.empty:
         series["fng"] = fng.set_index("date")["fng"].astype(float)
 
-    # On-chain (opcional): cada métrica vira uma série alinhada por data.
-    if incluir_onchain and tem_chave_onchain():
+    # On-chain: usa séries fornecidas ou busca (cada métrica vira série diária).
+    if series_onchain:
+        for m, s in series_onchain.items():
+            if s is not None and not s.empty:
+                series[m] = s.set_index("date")["valor"].astype(float)
+    elif incluir_onchain and tem_chave_onchain():
         for m in BGEO_ENDPOINTS:
             s = serie_onchain_cache(m)
             if not s.empty:

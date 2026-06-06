@@ -62,22 +62,61 @@ def carregar_trends() -> pd.DataFrame:
     return common.fetch_google_trends(termo="Bitcoin", timeframe="today 5-y")
 
 
+@st.cache_data(ttl=86400, show_spinner="Buscando indicadores on-chain...")
+def carregar_onchain_series() -> dict:
+    """
+    Busca a SÉRIE de cada métrica on-chain UMA vez por dia (cache em memória
+    do Streamlit, que sobrevive a reruns — diferente do cache em disco, que é
+    apagado no Streamlit Cloud). Devolve {metrica: [(date_iso, valor), ...]}.
+
+    Como @st.cache_data só guarda o RETORNO em caso de sucesso, e aqui só
+    chamamos a API 1x/dia, o consumo da cota (15 req/dia) cai drasticamente.
+    """
+    if not term.tem_chave_onchain():
+        return {}
+    out = {}
+    for m in term.BGEO_ENDPOINTS:
+        s = term.fetch_onchain_serie(m)  # 1 requisição traz a série inteira
+        if not s.empty:
+            out[m] = [(d.strftime("%Y-%m-%d"), float(v))
+                      for d, v in zip(s["date"], s["valor"])]
+    return out
+
+
+def _onchain_series_df(series_dict: dict) -> dict:
+    """Converte o dict serializável em {metrica: DataFrame['date','valor']}."""
+    res = {}
+    for m, pares in (series_dict or {}).items():
+        if pares:
+            df = pd.DataFrame(pares, columns=["date", "valor"])
+            df["date"] = pd.to_datetime(df["date"])
+            res[m] = df
+    return res
+
+
 @st.cache_data(ttl=3600, show_spinner="Calculando o termômetro (indicadores)...")
-def carregar_snapshot_termometro(periodo: int, fng_atual: float) -> pd.DataFrame:
+def carregar_snapshot_termometro(periodo: int, fng_atual: float,
+                                 onchain_series: tuple) -> pd.DataFrame:
     # Usa histórico longo para os indicadores de média móvel (200d/200w).
     preco_longo = common.fetch_btc_price(dias=1500)
-    return term.montar_snapshot(preco_longo, fng_atual=fng_atual, incluir_onchain=True)
+    series = _onchain_series_df(dict(onchain_series))
+    # Último valor de cada série on-chain (já cacheada pelo Streamlit).
+    valores_oc = {m: float(df["valor"].dropna().iloc[-1])
+                  for m, df in series.items() if not df["valor"].dropna().empty}
+    return term.montar_snapshot(preco_longo, fng_atual=fng_atual,
+                                valores_onchain=valores_oc if valores_oc else None)
 
 
 @st.cache_data(ttl=3600, show_spinner="Recalculando score histórico...")
 def carregar_score_historico(periodo: int, selecionados: tuple,
-                             incluir_onchain: bool, pesos_itens: tuple) -> pd.DataFrame:
+                             pesos_itens: tuple, onchain_series: tuple) -> pd.DataFrame:
     preco_longo = common.fetch_btc_price(dias=1500)
     fng_full = common.fetch_fear_greed(limit=0)
     sel = list(selecionados) if selecionados else None
     pesos = dict(pesos_itens) if pesos_itens else None
+    series_oc = _onchain_series_df(dict(onchain_series))  # já buscadas (cache)
     return term.serie_score_historico(preco_longo, fng_full, selecionados=sel,
-                                      incluir_onchain=incluir_onchain, pesos=pesos)
+                                      pesos=pesos, series_onchain=series_oc)
 
 
 @st.cache_data(ttl=900, show_spinner="Buscando texto para a IA (Reddit/notícias)...")
@@ -240,7 +279,11 @@ st.subheader("🌡️ Termômetro do Bitcoin")
 st.caption("Sinais de compra/venda combinando vários indicadores num score de "
            "−2 (venda forte) a +2 (compra forte). **Não é recomendação financeira.**")
 
-snapshot = carregar_snapshot_termometro(periodo, float(fng_atual))
+# On-chain buscado 1x/dia (cache em memória do Streamlit) e reaproveitado
+# pelo snapshot e pelo gráfico histórico — evita estourar a cota da API.
+onchain_series = carregar_onchain_series()
+onchain_tuple = tuple(sorted(onchain_series.items()))
+snapshot = carregar_snapshot_termometro(periodo, float(fng_atual), onchain_tuple)
 
 # Cores por sinal (para os cards e a tabela).
 COR_SINAL = {
@@ -383,12 +426,14 @@ rc1.metric("🟢 Compra", n_compra)
 rc2.metric("⚪ Neutro", n_neutro)
 rc3.metric("🔴 Venda", n_venda)
 
-# Gráfico: score histórico (área) sobreposto ao preço. Agora inclui a série
-# histórica dos on-chain selecionados (via cache) e respeita os pesos.
-usa_onchain_hist = any(s in term.ONCHAIN for s in selecionados)
+# Gráfico: score histórico (área) sobreposto ao preço. Inclui a série
+# histórica dos on-chain (reaproveitada do cache) e respeita os pesos.
+# Passa só as séries on-chain SELECIONADAS para o histórico.
+oc_sel = tuple((m, v) for m, v in onchain_tuple if m in selecionados)
 hist = carregar_score_historico(
-    periodo, tuple(sorted(selecionados)), usa_onchain_hist,
-    tuple(sorted(pesos.items())) if (modo_pesos and pesos) else ())
+    periodo, tuple(sorted(selecionados)),
+    tuple(sorted(pesos.items())) if (modo_pesos and pesos) else (),
+    oc_sel)
 if not hist.empty:
     corte_h = hist["date"].max() - pd.Timedelta(days=periodo)
     hist = hist[hist["date"] >= corte_h]
