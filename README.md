@@ -73,6 +73,76 @@ são buscados 1×/dia e cacheados em memória (poupa a cota grátis da API).
 
 ---
 
+## 🔮 BTC Cycle Model (score de ciclo 0–100)
+
+O **Cycle Model** responde a uma pergunta diferente do Termômetro. O termômetro
+diz "compra ou venda hoje?"; o Cycle Model diz **em que ponto do ciclo de
+mercado o Bitcoin está** — e traduz isso em **gestão de posição**.
+
+- Score **contínuo de 0 a 100** (interpolação, não degraus):
+  `0 = fundo profundo`, `100 = euforia`.
+- Cinco fases: **FUNDO PROFUNDO** (<15) · **ACUMULAÇÃO** (15–35) ·
+  **EXPANSÃO** (35–60) · **DISTRIBUIÇÃO** (60–80) · **EUFORIA** (>80).
+- Card visual próprio (HTML+SVG, sem JS): medidor, composição do score,
+  espectro das fases e o plano de ação da fase atual.
+
+### Os pilares (e o que roda sem chave nenhuma)
+
+Cada pilar tem a métrica on-chain "de verdade" e um **fallback grátis**
+calculado só do preço — então o modelo **nunca fica mudo**, e a interface
+marca com o selo `PROXY` toda linha que está no fallback.
+
+| Pilar | Peso | On-chain (com `BGEO_API_KEY`) | Fallback grátis (só preço) |
+|-------|-----:|-------------------------------|----------------------------|
+| MVRV Z-Score | 22% | MVRV Z-Score | z-score da razão preço/MA200W |
+| NUPL | 20% | NUPL | `1 − MA200W/preço` |
+| Supply in Profit | 15% | Supply in Profit | % dos dias dos últimos 4 anos abaixo do preço atual |
+| RHODL Ratio | 13% | RHODL Ratio (ou Reserve Risk) | drawdown do topo histórico |
+| SOPR | 10% | SOPR (média 7d) | RSI mensal |
+| Ciclo & Sentimento | 20% | — | Mayer Multiple + Fear & Greed + relógio do halving |
+
+Os proxies de MVRV/NUPL se apoiam num fato conhecido do mercado: a **média
+móvel de 200 semanas anda historicamente colada no realized price** (o custo
+médio da rede). É aproximação, não a métrica real — por isso o selo.
+
+Se um pilar não tiver dado num dia, **o peso dele é redistribuído** entre os
+demais: o score continua na mesma escala 0–100 e o rodapé do card mostra
+quanto do peso total tinha dado (`% DO PESO`).
+
+### Do score para a posição
+
+| Faixa | Fase | Ação | Exposição-alvo | DCA |
+|-------|------|------|---------------:|----:|
+| 0–15 | Fundo profundo | acumular agressivo | ~100% | 2,5–3,0× |
+| 15–35 | Acumulação | acumular | 90–100% | 1,8–2,5× |
+| 35–60 | Expansão | manter | 62–80% | 0,8–1,2× |
+| 60–80 | Distribuição | realizar gradual | 30–62% | 0,25–0,8× |
+| 80–100 | Euforia | realizar / caixa | 8–30% | 0× |
+
+A exposição-alvo é uma **curva contínua** (nada de "tudo ou nada"), e a aba
+mostra o **score semanal** — o modelo é de ciclo, então a decisão deve ser
+tomada no fechamento da semana, não no ruído do dia. O **backtest** compara
+seguir essa curva contra comprar e segurar (retorno, CAGR, drawdown, Sharpe).
+
+### Como usar
+
+```bash
+streamlit run dashboard.py        # aba "🔮 Cycle Model"
+python scripts/06_cycle_model.py  # terminal + exporta cycle_model.html
+python scripts/cycle_model.py --autoteste   # testa o modelo offline
+```
+
+Sem chave, roda com os proxies. Com a `BGEO_API_KEY` (mesma chave grátis do
+termômetro, ver seção acima), os pilares trocam automaticamente para as
+métricas on-chain reais — e as métricas em comum **compartilham o cache** do
+termômetro, sem gastar requisição duas vezes.
+
+> ⚠️ Limiares de fundo e de topo **mudam a cada ciclo** (o mercado amadurece,
+> a volatilidade cai). O modelo organiza a decisão; ele não prevê o futuro.
+> **Não é recomendação financeira.**
+
+---
+
 ## 🧠 A "IA" (análise de sentimento)
 
 - **VADER** (`vaderSentiment`) — leve, baseado em regras. Versão didática.
@@ -97,7 +167,10 @@ btc-mood-tracker/
     ├── 02_indices_gratis.py    # BTC + Fear & Greed; correlação; gráfico
     ├── 03_duas_fontes.py       # + Google Trends como 2ª linha de humor
     ├── 04_cache_defasagem.py   # cache CSV, média móvel, correlação defasada
-    └── 05_finbert.py           # FinBERT lendo texto real do Reddit, x preço
+    ├── 05_finbert.py           # FinBERT lendo texto real do Reddit, x preço
+    ├── 06_cycle_model.py       # BTC Cycle Model no terminal + card HTML
+    ├── termometro.py           # score consolidado -2..+2 (indicadores soltos)
+    └── cycle_model.py          # modelo de CICLO 0-100 + card visual + backtest
 ```
 
 ---
@@ -139,6 +212,7 @@ python scripts/03_duas_fontes.py      # + Google Trends
 python scripts/04_cache_defasagem.py  # cache CSV + média móvel + correlação defasada
 python scripts/01_simples_vader.py    # Reddit + VADER
 python scripts/05_finbert.py          # Reddit + FinBERT (baixa o modelo na 1ª vez)
+python scripts/06_cycle_model.py      # 🔮 score de ciclo 0-100 + cycle_model.html
 ```
 
 ### Dashboard interativo
@@ -147,7 +221,8 @@ python scripts/05_finbert.py          # Reddit + FinBERT (baixa o modelo na 1ª 
 streamlit run dashboard.py
 ```
 
-O dashboard tem: **filtros de período**, **escolha de subreddits**, **toggle do
+O dashboard tem 5 abas (**🔮 Cycle Model**, Termômetro, Preço & Humor,
+Backtest e IA), **filtros de período**, **escolha de subreddits**, **toggle do
 FinBERT**, **métricas no topo** (preço, Fear & Greed, correlação), **gráfico
 Plotly interativo** e uma **tabela dos posts classificados pela IA**. Ele
 renderiza mesmo que o Google Trends ou o FinBERT estejam indisponíveis.
@@ -197,7 +272,9 @@ Observações:
 - [x] Histórico próprio: log diário do score (1 linha/dia) com gráfico.
 - [x] Alertas visuais de zona (COMPRA FORTE / VENDA FORTE).
 - [ ] Mais fontes de humor (funding rate, dominância).
-- [ ] Exportar relatórios (PDF/HTML) a partir do dashboard.
+- [x] Modelo de ciclo 0–100 (Cycle Model) com card visual e plano de posição.
+- [x] Exportar relatório HTML (card do Cycle Model, via script 06).
+- [ ] Exportar relatório em PDF.
 - [ ] Mais idiomas no sentimento (modelos multilíngues).
 
 ---

@@ -25,11 +25,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scr
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 import common  # noqa: E402
 import termometro as term  # noqa: E402  (score consolidado estilo "termômetro")
+import cycle_model as cm  # noqa: E402  (score de CICLO 0-100, com card visual)
 
 # --------------------------------------------------------------------------
 # Configuração da página
@@ -117,6 +119,38 @@ def carregar_score_historico(periodo: int, selecionados: tuple,
     series_oc = _onchain_series_df(dict(onchain_series))  # já buscadas (cache)
     return term.serie_score_historico(preco_longo, fng_full, selecionados=sel,
                                       pesos=pesos, series_onchain=series_oc)
+
+
+@st.cache_data(ttl=86400, show_spinner="Buscando on-chain do Cycle Model...")
+def carregar_cycle_onchain() -> dict:
+    """
+    Séries on-chain do Cycle Model, buscadas no máximo 1×/dia (cache em
+    memória do Streamlit). Compartilha o cache em disco do termômetro, então
+    as métricas em comum não gastam requisição duas vezes. Sem chave: {}.
+    """
+    series = cm.buscar_series_onchain()
+    return {m: [(d.strftime("%Y-%m-%d"), float(v))
+                for d, v in zip(df["date"], df["valor"])]
+            for m, df in series.items() if not df.empty}
+
+
+@st.cache_data(ttl=3600, show_spinner="Rodando o BTC Cycle Model...")
+def carregar_cycle(onchain_itens: tuple):
+    """
+    Snapshot + histórico do modelo de ciclo. Usa histórico longo de preço
+    (a MA200W, base dos proxies grátis, precisa de ~4 anos).
+    Devolve (snapshot: dict, historico: DataFrame).
+    """
+    preco_longo = common.fetch_btc_price(dias=2200)
+    fng_full = common.fetch_fear_greed(limit=0)
+    series = _onchain_series_df(dict(onchain_itens))
+    if preco_longo.empty:
+        return {}, pd.DataFrame()
+    snap = cm.calcular(preco_longo, fng=fng_full if not fng_full.empty else None,
+                       series_onchain=series)
+    hist = cm.serie_score(preco_longo, fng_full if not fng_full.empty else None,
+                          series)
+    return snap, hist
 
 
 @st.cache_data(ttl=900, show_spinner="Buscando texto para a IA (Reddit/notícias)...")
@@ -324,8 +358,135 @@ except Exception:
 # ==========================================================================
 # ABAS — deixam o app enxuto: cada assunto na sua aba.
 # ==========================================================================
-aba_term, aba_preco, aba_bt, aba_ia = st.tabs(
-    ["🌡️ Termômetro", "📊 Preço & Humor", "🧪 Backtest", "🧠 IA"])
+aba_ciclo, aba_term, aba_preco, aba_bt, aba_ia = st.tabs(
+    ["🔮 Cycle Model", "🌡️ Termômetro", "📊 Preço & Humor", "🧪 Backtest", "🧠 IA"])
+
+# --------------------------------------------------------------------------
+# ABA 1 — CYCLE MODEL (score de ciclo 0–100 + gestão de posição)
+# --------------------------------------------------------------------------
+with aba_ciclo:
+    cycle_oc = carregar_cycle_onchain()
+    snap_ciclo, hist_ciclo = carregar_cycle(tuple(sorted(cycle_oc.items())))
+
+    if not snap_ciclo:
+        st.info("Não foi possível montar o modelo de ciclo agora (preço "
+                "indisponível). Tente de novo em instantes.")
+    else:
+        # --- O card visual (HTML+SVG). Vai num iframe para o CSS do card não
+        #     brigar com o tema do Streamlit.
+        components.html(cm.card_html(snap_ciclo), height=680, scrolling=True)
+
+        plano_c = snap_ciclo["plano"]
+        c1, c2, c3, c4 = st.columns(4)
+        d30 = snap_ciclo.get("delta30", float("nan"))
+        c1.metric("Score de ciclo", f"{snap_ciclo['score']:.0f}/100",
+                  None if d30 != d30 else f"{d30:+.0f} em 30d",
+                  delta_color="inverse")  # score subindo = mais risco
+        c2.metric("Fase", snap_ciclo["fase"])
+        c3.metric("Exposição-alvo", f"{plano_c['exposicao_alvo']:.0f}%",
+                  f"realizar {plano_c['realizado_alvo']:.0f}%")
+        c4.metric("DCA adaptativo", f"{plano_c['dca']:.2f}×",
+                  "do aporte normal", delta_color="off")
+
+        if snap_ciclo["fonte"] != "on-chain":
+            st.caption("Rodando com os **proxies grátis** (calculados do preço). "
+                       "Defina a chave `BGEO_API_KEY` para trocar os proxies "
+                       "pelas métricas on-chain reais (MVRV Z, NUPL, SOPR, "
+                       "RHODL, Supply in Profit).")
+
+        # --- Histórico: preço (log) em cima, score com as faixas de fase embaixo.
+        if not hist_ciclo.empty:
+            h = hist_ciclo[hist_ciclo["date"] >=
+                           hist_ciclo["date"].max() - pd.Timedelta(days=periodo)]
+            figc = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                 vertical_spacing=0.06, row_heights=[0.58, 0.42],
+                                 subplot_titles=("Preço BTC (escala log)",
+                                                 "Score de ciclo (0–100)"))
+            figc.add_trace(go.Scatter(x=h["date"], y=h["price"], name="BTC (USD)",
+                                      line=dict(color=LARANJA, width=1.8)),
+                           row=1, col=1)
+            figc.add_trace(go.Scatter(x=h["date"], y=h["score"], name="Score",
+                                      line=dict(color="#e6e9ec", width=1.6)),
+                           row=2, col=1)
+            piso = 0
+            for limite, nome, cor in cm.FASES:
+                topo = min(limite, 100)
+                figc.add_hrect(y0=piso, y1=topo, fillcolor=cor, opacity=0.16,
+                               line_width=0, row=2, col=1,
+                               annotation_text=nome, annotation_position="top left",
+                               annotation_font_size=9, annotation_font_color=cor)
+                piso = topo
+            figc.update_yaxes(type="log", row=1, col=1)
+            figc.update_yaxes(range=[0, 100], row=2, col=1)
+            figc.update_layout(template="plotly_dark", height=560, showlegend=False,
+                               margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(figc, use_container_width=True)
+
+            # --- Leitura semanal (o modelo é de ciclo: decida no fim de semana).
+            sem = cm.serie_semanal(hist_ciclo).tail(12).iloc[::-1]
+            if not sem.empty:
+                sem_show = pd.DataFrame({
+                    "Semana": sem["date"].dt.date,
+                    "Preço": sem["price"].map(lambda v: f"${v:,.0f}"),
+                    "Score": sem["score"].map(lambda v: f"{v:.1f}"),
+                    "Fase": sem["fase"],
+                    "Exposição-alvo": sem["score"].map(
+                        lambda v: f"{cm.alvo_exposicao(v):.0f}%"),
+                    "DCA": sem["score"].map(lambda v: f"{cm.multiplicador_dca(v):.2f}×"),
+                })
+                st.markdown("**Score semanal** — uma decisão por semana, no máximo.")
+                st.dataframe(sem_show, use_container_width=True, hide_index=True)
+
+            # --- Backtest da curva de exposição.
+            btc_ = cm.backtest_exposicao(hist_ciclo)
+            if btc_:
+                with st.expander("🧪 Backtest: seguir a curva de exposição do modelo"):
+                    m, hh = btc_["modelo"], btc_["hold"]
+                    b1, b2, b3, b4 = st.columns(4)
+                    b1.metric("Modelo", f"{m['ret_total']*100:+.0f}%",
+                              f"CAGR {m['cagr']*100:.0f}%")
+                    b2.metric("Buy & Hold", f"{hh['ret_total']*100:+.0f}%",
+                              f"CAGR {hh['cagr']*100:.0f}%")
+                    b3.metric("Drawdown", f"{m['dd_max']*100:.0f}%",
+                              f"hold {hh['dd_max']*100:.0f}%", delta_color="off")
+                    b4.metric("Exposição média", f"{m['exposicao_media']:.0f}%")
+                    curva_c = btc_["curva"]
+                    figbc = go.Figure()
+                    figbc.add_trace(go.Scatter(x=curva_c["date"], y=curva_c["cap_modelo"],
+                                               name="Modelo (exposição pelo score)",
+                                               line=dict(color=VERDE, width=1.8)))
+                    figbc.add_trace(go.Scatter(x=curva_c["date"], y=curva_c["cap_hold"],
+                                               name="Buy & Hold",
+                                               line=dict(color=LARANJA, width=1.6)))
+                    figbc.update_layout(template="plotly_dark", height=320,
+                                        margin=dict(l=10, r=10, t=30, b=10),
+                                        title="Capital acumulado (1 = início)",
+                                        legend=dict(orientation="h", y=1.14),
+                                        yaxis_title="Múltiplo do capital")
+                    st.plotly_chart(figbc, use_container_width=True)
+                    st.caption("O modelo troca retorno por drawdown: fica menos "
+                               "exposto perto do topo do ciclo. Sem taxas nem "
+                               "impostos. **Não é recomendação financeira.**")
+
+        # --- O que cada pilar mede e de onde veio o dado de hoje.
+        with st.expander("📖 Como o score é montado"):
+            st.caption("Cada pilar vira um sub-score 0–100 (0 = fundo, 100 = "
+                       "euforia) por interpolação contínua. O score final é a "
+                       "média ponderada dos pilares COM dado — se um pilar "
+                       "falta, o peso dele é redistribuído.")
+            st.dataframe(pd.DataFrame([{
+                "Pilar": c["nome"],
+                "Peso": f"{c['peso']*100:.0f}%",
+                "Fonte usada": c["fonte"],
+                "Tipo": c["tipo"],
+                "Valor": "—" if c["valor"] != c["valor"] else f"{c['valor']:.3f}",
+                "Sub-score": "—" if not c["ok"] else f"{c['sub_score']:.0f}",
+                "Leitura": c["rotulo"],
+                "O que mede": c["sobre"],
+            } for c in snap_ciclo["componentes"]]),
+                use_container_width=True, hide_index=True)
+            st.caption("⚠️ Limiares de fundo e topo mudam a cada ciclo. "
+                       "**Não é recomendação financeira.**")
 
 # --------------------------------------------------------------------------
 # ABA 1 — TERMÔMETRO (gauge + tabela + resumo + histórico do score)
