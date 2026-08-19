@@ -60,16 +60,24 @@ def main() -> None:
     if not fng.empty:
         print(f"   Fear & Greed: {len(fng)} dias")
 
+    # On-chain grátis e sem chave (Coin Metrics): MVRV, MVRV Z, NUPL, Puell.
+    dados_cm = cm.fetch_coinmetrics()
+    if not dados_cm.empty:
+        print(f"   On-chain grátis (Coin Metrics): {len(dados_cm)} dias "
+              f"— MVRV, MVRV Z-Score, NUPL e Puell reais")
+    else:
+        print("   Coin Metrics indisponível — o modelo cai nos proxies de preço")
+
     if cm.tem_onchain():
         series_oc = cm.buscar_series_onchain()
-        print(f"   On-chain (BGeometrics): {len(series_oc)} métricas "
+        print(f"   On-chain com chave (BGeometrics): {len(series_oc)} métricas "
               f"{sorted(series_oc) if series_oc else ''}")
     else:
         series_oc = {}
-        print("   On-chain: sem chave (BGEO_API_KEY) — usando os proxies grátis")
+        print("   Sem BGEO_API_KEY: SOPR, RHODL e Supply in Profit ficam no proxy")
 
     res = cm.calcular(preco, fng=fng if not fng.empty else None,
-                      series_onchain=series_oc)
+                      series_onchain=series_oc, dados_cm=dados_cm)
 
     # ---------------- saída no terminal ----------------
     print("\n" + "=" * 68)
@@ -95,7 +103,8 @@ def main() -> None:
         print(f"   Momentum do ciclo: {res['delta30']:+.1f} pontos em 30 dias")
 
     # ---------------- histórico semanal + backtest ----------------
-    hist = cm.serie_score(preco, fng if not fng.empty else None, series_oc)
+    hist = cm.serie_score(preco, fng if not fng.empty else None, series_oc,
+                          dados_cm=dados_cm)
     sem = cm.serie_semanal(hist)
     if not sem.empty:
         print(f"\n   ÚLTIMAS {args.semanas} SEMANAS (o modelo é de ciclo: "

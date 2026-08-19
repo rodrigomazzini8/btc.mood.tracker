@@ -68,6 +68,36 @@ GET https://api.bgeometrics.com/v1/mvrv?token=SEU_TOKEN
 
 ---
 
+## 3b) On-chain GRÁTIS e SEM CHAVE — Coin Metrics Community
+
+Melhor fonte on-chain sem cadastro: a Coin Metrics publica o dataset
+"community" do BTC como CSV no GitHub.
+
+- **URL:** `https://raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv`
+- **Tamanho:** ~2,5 MB (série diária desde 2010). **Cacheie** por 12–24h.
+- **Colunas usadas:** `time`, `PriceUSD`, `CapMrktCurUSD` (market cap),
+  `CapMVRVCur` (MVRV), `IssTotUSD` (emissão do dia em USD).
+- **Uso não comercial.** Crédito: Coin Metrics Community Data.
+
+Dá para derivar as métricas de ciclo mais importantes:
+
+```
+realized_cap = CapMrktCurUSD / CapMVRVCur
+MVRV         = CapMVRVCur
+MVRV Z-Score = (market_cap − realized_cap) / desvio_padrão(market_cap)
+               (use desvio EXPANDIDO, só com o passado, p/ não ter look-ahead)
+NUPL         = 1 − 1/MVRV
+Puell        = IssTotUSD / média_365d(IssTotUSD)
+```
+
+Bônus: o CSV também traz o **preço** (`PriceUSD`), então serve de fallback
+quando Binance/CoinGecko estiverem bloqueados no seu servidor.
+
+Não tem: SOPR, RHODL e Supply in Profit — para esses, só a BGeometrics
+(seção 3) ou um proxy.
+
+---
+
 ## 4) Termômetro — como vira um SCORE de −2 a +2
 
 Cada indicador é convertido num score inteiro de **−2 (venda forte)** a
@@ -114,29 +144,66 @@ no ciclo** o mercado está e **qual posição carregar**. Escala contínua
 
 ### Escalas (valor → sub-score 0..100, interpolando)
 
+Calibradas contra a série real de 2010–2026 (ver `scripts/07_calibracao.py`).
+**Ponto-chave: a amplitude do ciclo cai a cada ciclo** — MVRV Z-Score nos
+topos foi 8,9 (2013) → 8,9 (2017) → 5,3 (abr/21) → 3,5 (nov/21) → 2,9
+(mar/24) → 2,5 (out/25). Escala de topo em "Z > 6" não dispara mais.
+
 ```
-mvrv_z:        -1→0   0→10  1→26  2→42  3→56  4→70  5→82  6.5→93  8→100
-nupl:        -0.25→0   0→12  .25→32  .40→45  .50→58  .60→71  .70→86  .85→100
-supply_lucro:   45→0  55→12  65→25  75→40  85→58  92→74  96→88  99→100   (em %)
-rhodl (log10): 2.6→0  3.0→16  3.4→34  3.8→54  4.2→74  4.5→89  5.0→100
-sopr (MM7d):  0.95→0  0.98→16  1.00→35  1.01→50  1.02→65  1.035→80  1.08→100
-mayer:         0.6→0  0.8→14  1.0→30  1.3→46  1.7→62  2.2→79  3.5→100
-fng:             5→0   20→16   35→33   50→50   65→67   80→84   92→100
-halving (dias):  0→32  180→46  350→62  520→85  560→90  700→62  900→38  1100→18
+# --- on-chain real ---
+mvrv_z:      -1→0  -0.5→4  0→10  0.5→20  1→30  1.5→40  2→52  2.5→72  3→82
+             3.5→89  4.5→94  6→98  8→100
+mvrv:        0.6→0  0.8→8  1→18  1.2→28  1.4→38  1.7→50  2→62  2.3→74
+             2.7→84  3.2→91  4→96  5→100
+nupl:      -0.5→0  -0.25→6  0→14  .15→25  .30→38  .42→50  .50→60  .56→70
+             .62→79  .68→87  .75→95  .85→100
+puell:       0.3→0  0.45→8  0.6→18  0.8→32  1→45  1.3→58  1.7→70  2.2→80
+             3→89  5→96  9→100
+supply_lucro (%): 50→0  60→10  70→22  78→34  85→48  90→60  94→72  97→85
+             99→95  100→100
+rhodl (log10):    2.6→0  3.0→14  3.3→28  3.6→44  3.9→60  4.1→74  4.35→88  4.7→100
+sopr (MM7d):      0.95→0  0.98→16  1.00→35  1.01→50  1.02→65  1.035→80
+             1.05→92  1.08→100
+
+# --- proxies (só preço) — CADA UM COM ESCALA PRÓPRIA ---
+z_extensao:  z-score de log(preço/MA200sem) em janela MÓVEL de 4 anos
+             -2.3→0  -1.6→8  -1.2→18  -0.8→32  -0.29→50  0.2→62  0.6→72
+             1.0→82  1.4→90  2.0→96  2.8→100
+nupl_proxy (= 1 − MA200sem/preço):
+             -0.5→0  -0.2→8  0→16  .15→27  .30→38  .44→50  .55→62  .65→73
+             .75→84  .85→93  .95→100
+supply_lucro_proxy (% dos últimos 1460 dias abaixo do preço de hoje):
+             48→0  58→10  66→20  72→30  79→40  85→50  90→60  94→70  97→80
+             99→90  100→100
+drawdown (% do topo histórico):
+             -85→0  -75→8  -65→18  -55→30  -46→42  -35→55  -25→66  -15→77
+             -8→86  -3→94  0→100
+mayer:       0.5→0  0.7→10  0.85→22  1→36  1.11→50  1.25→62  1.4→71  1.6→80
+             1.9→89  2.4→96  3.5→100
+rsi_mensal:  25→0  35→8  45→20  52→30  58→40  63→50  68→60  73→70  80→82
+             88→93  95→100
+             (a mediana do RSI mensal do BTC é ~63, NÃO 50 — usar 50→50
+              faz o modelo ler fundo de ciclo como "neutro")
+fng:         5→0  20→16  35→33  50→50  65→67  80→84  92→100
+halving (dias): 0→32  180→46  350→62  520→85  560→90  700→62  900→38
+             1100→18  1300→22  1460→30
 ```
 
 Fora das pontas o valor "gruda" no extremo (0 ou 100).
 
 ### Pilares e pesos (média ponderada só dos que TÊM dado)
 
-| Pilar | Peso | On-chain | Fallback grátis (só preço) |
-|-------|-----:|----------|----------------------------|
-| MVRV Z-Score | 0.22 | `mvrv-zscore` | z-score de `preço/MA200sem` |
-| NUPL | 0.20 | `nupl` | `1 − MA200sem/preço` |
-| Supply in Profit | 0.15 | `supply-in-profit` | % dos últimos 1460 dias com fechamento < preço de hoje |
-| RHODL Ratio | 0.13 | `rhodl-ratio` (ou `reserve-risk`) | drawdown do topo histórico (%) |
-| SOPR | 0.10 | `sopr` (MM 7d) | RSI mensal |
-| Ciclo & Sentimento | 0.20 | — | média de Mayer + Fear&Greed + relógio do halving |
+Ordem de preferência por pilar: BGeometrics (chave) → Coin Metrics (grátis) →
+proxy de preço.
+
+| Pilar | Peso | BGeometrics | Coin Metrics | Proxy (só preço) |
+|-------|-----:|-------------|--------------|------------------|
+| MVRV Z-Score | 0.22 | `mvrv-zscore` | MVRV Z-Score real | `z_extensao` |
+| NUPL | 0.20 | `nupl` | NUPL real | `nupl_proxy` |
+| Supply in Profit | 0.15 | `supply-in-profit` | — | `supply_lucro_proxy` |
+| RHODL Ratio | 0.13 | `rhodl-ratio` / `reserve-risk` | Puell real | `drawdown` |
+| SOPR | 0.10 | `sopr` (MM 7d) | — | `rsi_mensal` |
+| Ciclo & Sentimento | 0.20 | — | — | média de Mayer + F&G + halving |
 
 `score = Σ(sub_i × peso_i) / Σ(peso_i disponível)` — se um pilar falta, o peso
 dele é redistribuído (o score fica sempre em 0..100).

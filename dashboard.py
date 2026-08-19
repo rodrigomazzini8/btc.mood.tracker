@@ -134,8 +134,18 @@ def carregar_cycle_onchain() -> dict:
             for m, df in series.items() if not df.empty}
 
 
+@st.cache_data(ttl=43200, show_spinner="Baixando on-chain grátis (Coin Metrics)...")
+def carregar_coinmetrics() -> pd.DataFrame:
+    """
+    On-chain REAL sem chave nenhuma: CSV público da Coin Metrics (MVRV,
+    MVRV Z-Score, NUPL e Puell reais). ~2,5 MB, cacheado 12h em disco pelo
+    próprio cycle_model. Se falhar, devolve vazio e o modelo usa os proxies.
+    """
+    return cm.fetch_coinmetrics()
+
+
 @st.cache_data(ttl=3600, show_spinner="Rodando o BTC Cycle Model...")
-def carregar_cycle(onchain_itens: tuple):
+def carregar_cycle(onchain_itens: tuple, cm_assinatura: tuple):
     """
     Snapshot + histórico do modelo de ciclo. Usa histórico longo de preço
     (a MA200W, base dos proxies grátis, precisa de ~4 anos).
@@ -144,12 +154,16 @@ def carregar_cycle(onchain_itens: tuple):
     preco_longo = common.fetch_btc_price(dias=2200)
     fng_full = common.fetch_fear_greed(limit=0)
     series = _onchain_series_df(dict(onchain_itens))
+    dados_cm = carregar_coinmetrics()
     if preco_longo.empty:
-        return {}, pd.DataFrame()
+        # Sem preço das corretoras: a própria série da Coin Metrics tem preço.
+        if dados_cm is None or dados_cm.empty:
+            return {}, pd.DataFrame()
+        preco_longo = dados_cm[["date", "price"]].tail(2200).reset_index(drop=True)
     snap = cm.calcular(preco_longo, fng=fng_full if not fng_full.empty else None,
-                       series_onchain=series)
+                       series_onchain=series, dados_cm=dados_cm)
     hist = cm.serie_score(preco_longo, fng_full if not fng_full.empty else None,
-                          series)
+                          series, dados_cm=dados_cm)
     return snap, hist
 
 
@@ -366,7 +380,14 @@ aba_ciclo, aba_term, aba_preco, aba_bt, aba_ia = st.tabs(
 # --------------------------------------------------------------------------
 with aba_ciclo:
     cycle_oc = carregar_cycle_onchain()
-    snap_ciclo, hist_ciclo = carregar_cycle(tuple(sorted(cycle_oc.items())))
+    dados_cm_tab = carregar_coinmetrics()
+    # A assinatura (nº de linhas + última data) invalida o cache quando a
+    # Coin Metrics publica um dia novo, sem carregar o CSV inteiro na chave.
+    assinatura_cm = ((len(dados_cm_tab), str(dados_cm_tab["date"].max().date()))
+                     if dados_cm_tab is not None and not dados_cm_tab.empty
+                     else (0, ""))
+    snap_ciclo, hist_ciclo = carregar_cycle(tuple(sorted(cycle_oc.items())),
+                                            assinatura_cm)
 
     if not snap_ciclo:
         st.info("Não foi possível montar o modelo de ciclo agora (preço "
@@ -389,10 +410,15 @@ with aba_ciclo:
                   "do aporte normal", delta_color="off")
 
         if snap_ciclo["fonte"] != "on-chain":
-            st.caption("Rodando com os **proxies grátis** (calculados do preço). "
-                       "Defina a chave `BGEO_API_KEY` para trocar os proxies "
-                       "pelas métricas on-chain reais (MVRV Z, NUPL, SOPR, "
-                       "RHODL, Supply in Profit).")
+            st.caption("Rodando com os **proxies grátis** (calculados do preço) "
+                       "— a Coin Metrics não respondeu agora. Ela normalmente "
+                       "traz MVRV, NUPL e Puell reais sem chave nenhuma.")
+        else:
+            st.caption("On-chain real via **Coin Metrics** (grátis, sem chave). "
+                       "Com `BGEO_API_KEY` entram também SOPR, RHODL e Supply "
+                       "in Profit. MVRV Z-Score e NUPL saem da mesma relação "
+                       "market cap ÷ realized cap — são pilares correlacionados "
+                       "por construção.")
 
         # --- Histórico: preço (log) em cima, score com as faixas de fase embaixo.
         if not hist_ciclo.empty:

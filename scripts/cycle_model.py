@@ -12,23 +12,30 @@ Diferença para o `termometro.py` (que já existe no projeto):
     replicam a leitura on-chain clássica de ciclo, e traduzir esse número
     em **gestão de posição** (quanto acumular, quanto realizar).
 
-Pilares do modelo (cada um com fonte on-chain "de verdade" e um FALLBACK
-grátis calculado só do preço, para o modelo nunca ficar mudo):
+Pilares do modelo. Cada um usa a PRIMEIRA fonte disponível, nesta ordem:
+BGeometrics (com chave) -> Coin Metrics (grátis, sem chave) -> proxy
+calculado só do preço. Assim o modelo nunca fica mudo:
 
-  | Pilar                | On-chain (chave)      | Fallback grátis (preço)        |
-  |----------------------|-----------------------|--------------------------------|
-  | Valuation            | MVRV Z-Score          | Z da razão preço/MA200W        |
-  | Lucro não realizado  | NUPL                  | NUPL proxy = 1 − MA200W/preço  |
-  | Oferta em lucro      | Supply in Profit      | % de dias (4a) abaixo do preço |
-  | Mãos longas / ciclo  | RHODL Ratio           | Drawdown do topo histórico     |
-  | Realização de lucro  | SOPR                  | RSI mensal                     |
-  | Ciclo & sentimento   | —                     | Mayer + Fear&Greed + halving   |
+  | Pilar               | Com chave        | Grátis (Coin Metrics) | Proxy (preço)   |
+  |---------------------|------------------|-----------------------|-----------------|
+  | Valuation           | MVRV Z-Score     | MVRV Z-Score real     | Z log(P/MA200s) |
+  | Lucro não realizado | NUPL             | NUPL real             | 1 − MA200s/P    |
+  | Oferta em lucro     | Supply in Profit | —                     | % dias (4a) < P |
+  | Mãos longas / ciclo | RHODL / Res.Risk | Puell Multiple real   | Drawdown do ATH |
+  | Realização de lucro | SOPR             | —                     | RSI mensal      |
+  | Ciclo & sentimento  | —                | —                     | Mayer+F&G+halv. |
 
-O fallback do Valuation/NUPL se apoia num fato conhecido do mercado: a
+Os proxies de Valuation/NUPL se apoiam num fato conhecido do mercado: a
 **média móvel de 200 semanas** anda historicamente colada no **realized
-price** (custo médio da rede). Então `preço / MA200W` é um proxy razoável de
-MVRV, e `1 − MA200W/preço` é um proxy de NUPL. É proxy, não é a métrica
-real — e a interface deixa isso explícito em cada linha.
+price** (custo médio da rede). São proxies, não a métrica real — e a
+interface deixa isso explícito em cada linha, com o selo "proxy".
+
+CALIBRAÇÃO: as escalas foram ajustadas contra a série real do BTC de 2010 a
+2026 (Coin Metrics), conferindo o que o modelo diria em cada topo e fundo de
+ciclo — `python scripts/07_calibracao.py` reproduz a tabela. O achado que
+manda no desenho: **a amplitude de cada métrica encolhe a cada ciclo** (MVRV
+Z-Score nos topos: 8,9 em 2013 -> 2,5 em out/2025), então limiar de topo
+antigo simplesmente não dispara mais.
 
 Escala do score (0..100) e fases:
 
@@ -51,6 +58,8 @@ modelagem de ciclo. Modelos de ciclo erram, e os limiares de "fundo" e
 
 from __future__ import annotations
 
+import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -72,56 +81,93 @@ except Exception:  # pragma: no cover - import opcional (autoteste sem rede)
 # Direção: score BAIXO = fundo/barato/oportunidade. Score ALTO = topo/caro.
 
 ESCALAS: dict[str, list[tuple[float, float]]] = {
-    # --- Valuation -------------------------------------------------------
-    # MVRV Z-Score: <0 marcou todos os fundos de ciclo; 6-8 marcou os topos.
-    "mvrv_z":      [(-1.0, 0), (0.0, 10), (1.0, 26), (2.0, 42),
-                    (3.0, 56), (4.0, 70), (5.0, 82), (6.5, 93), (8.0, 100)],
-    # Proxy: z-score da razão preço/MA200W (mesma leitura, escala própria).
-    "z_extensao":  [(-1.5, 0), (-0.8, 12), (-0.2, 26), (0.4, 42),
-                    (1.0, 58), (1.6, 72), (2.2, 85), (3.0, 100)],
-
-    # --- Lucro não realizado --------------------------------------------
-    # NUPL: <0 capitulação; 0.5 otimismo; >0.75 euforia (topo).
-    "nupl":        [(-0.25, 0), (0.0, 12), (0.25, 32), (0.40, 45),
-                    (0.50, 58), (0.60, 71), (0.70, 86), (0.75, 93), (0.85, 100)],
-
-    # --- Oferta em lucro (% da oferta) -----------------------------------
-    "supply_lucro": [(45, 0), (55, 12), (65, 25), (75, 40),
-                     (85, 58), (92, 74), (96, 88), (99, 100)],
-
-    # --- Mãos longas / posição no ciclo ----------------------------------
-    # RHODL: usamos log10 (a métrica varia por ordens de grandeza).
-    "rhodl_log":   [(2.6, 0), (3.0, 16), (3.4, 34), (3.8, 54),
-                    (4.2, 74), (4.5, 89), (5.0, 100)],
-    # Fallback: drawdown do topo histórico, em % (0 = no ATH).
-    "drawdown":    [(-85, 0), (-70, 10), (-55, 24), (-40, 40),
-                    (-28, 55), (-18, 68), (-8, 84), (-2, 96), (0, 100)],
-
-    # --- Realização de lucro ---------------------------------------------
-    # SOPR (média de 7 dias): <1 = moedas vendidas no prejuízo (capitulação).
+    # ======================= MÉTRICAS ON-CHAIN REAIS =====================
+    # Calibradas contra a série real do BTC (2011-2026, Coin Metrics), nos
+    # topos e fundos de cada ciclo. Ver `scripts/07_calibracao.py`, que
+    # imprime a leitura do modelo em cada virada histórica.
+    #
+    # MVRV Z-Score real nos TOPOS: 8.9 (2013) · 8.9 (2017) · 5.3 (abr/21)
+    #   3.5 (nov/21) · 2.9 (mar/24) · 2.5 (out/25)  -> a amplitude do ciclo
+    #   CAI a cada ciclo, então exigir "Z > 6" para chamar topo nunca mais
+    #   dispararia. Nos FUNDOS: -0.6 (2015) · -0.5 (2018) · -0.3 (2022).
+    "mvrv_z":      [(-1.0, 0), (-0.5, 4), (0.0, 10), (0.5, 20), (1.0, 30),
+                    (1.5, 40), (2.0, 52), (2.5, 72), (3.0, 82), (3.5, 89),
+                    (4.5, 94), (6.0, 98), (8.0, 100)],
+    # MVRV (razão) — usada quando só o MVRV simples está disponível.
+    # Topos: 5.1 · 4.3 · 3.4 · 2.8 · 2.7 · 2.3. Fundos: 0.56 · 0.69 · 0.78.
+    "mvrv":        [(0.6, 0), (0.8, 8), (1.0, 18), (1.2, 28), (1.4, 38),
+                    (1.7, 50), (2.0, 62), (2.3, 74), (2.7, 84), (3.2, 91),
+                    (4.0, 96), (5.0, 100)],
+    # NUPL real nos topos: 0.80 · 0.76 · 0.70 · 0.65 · 0.63 · 0.56.
+    # Nos fundos: -0.77 · -0.45 · -0.29 · +0.13 (fev/26).
+    "nupl":        [(-0.5, 0), (-0.25, 6), (0.0, 14), (0.15, 25), (0.30, 38),
+                    (0.42, 50), (0.50, 60), (0.56, 70), (0.62, 79),
+                    (0.68, 87), (0.75, 95), (0.85, 100)],
+    # Puell Multiple real nos topos: 9.1 · 6.6 · 2.5 · 1.6 · 2.0 · 1.1.
+    # Nos fundos: 0.31 · 0.39 · 0.43 · 0.55.
+    "puell":       [(0.3, 0), (0.45, 8), (0.6, 18), (0.8, 32), (1.0, 45),
+                    (1.3, 58), (1.7, 70), (2.2, 80), (3.0, 89), (5.0, 96),
+                    (9.0, 100)],
+    # Supply in Profit (% da oferta): fundos ~45-55%, topos ~95-100%.
+    "supply_lucro": [(50, 0), (60, 10), (70, 22), (78, 34), (85, 48),
+                     (90, 60), (94, 72), (97, 85), (99, 95), (100, 100)],
+    # RHODL Ratio em log10 (a métrica varia por ordens de grandeza) e
+    # Reserve Risk em log10. Ambos também perderam amplitude nos ciclos
+    # recentes, então os limiares de topo foram baixados.
+    "rhodl_log":   [(2.6, 0), (3.0, 14), (3.3, 28), (3.6, 44), (3.9, 60),
+                    (4.1, 74), (4.35, 88), (4.7, 100)],
+    "reserve_log": [(-3.4, 0), (-3.1, 16), (-2.85, 34), (-2.6, 52),
+                    (-2.35, 70), (-2.1, 87), (-1.8, 100)],
+    # SOPR (média de 7 dias): <1 = moedas vendidas no prejuízo.
     "sopr":        [(0.95, 0), (0.98, 16), (1.00, 35), (1.010, 50),
                     (1.020, 65), (1.035, 80), (1.050, 92), (1.080, 100)],
-    # Fallback: RSI mensal.
-    "rsi_mensal":  [(25, 0), (35, 15), (45, 32), (55, 50),
-                    (65, 68), (75, 85), (85, 100)],
 
-    # --- Ciclo & sentimento (sempre grátis) ------------------------------
-    "mayer":       [(0.6, 0), (0.8, 14), (1.0, 30), (1.3, 46),
-                    (1.7, 62), (2.2, 79), (2.8, 92), (3.5, 100)],
-    "fng":         [(5, 0), (20, 16), (35, 33), (50, 50),
-                    (65, 67), (80, 84), (92, 100)],
-    # Relógio do halving: dias desde o último halving (0..1460). O padrão
-    # histórico (2012/2016/2020/2024) é topo ~1,5 ano DEPOIS do halving e
+    # ======================= PROXIES (só do preço) =======================
+    # Cada proxy tem escala PRÓPRIA, calibrada pela distribuição histórica
+    # dele (mediana ~50) e checada nos topos/fundos reais. Usar a escala da
+    # métrica real no proxy dava leituras erradas — eles têm distribuições
+    # bem diferentes.
+    #
+    # z-score (janela móvel de 4 anos) de log(preço/MA200sem).
+    # Topos: 2.75 (2017) · 1.26 (abr/21) · 0.82 (nov/21) · 0.52 (mar/24) ·
+    #        1.04 (out/25).  Fundos: -1.3 (2018) · -2.2 (2022) · -0.8 (fev/26).
+    "z_extensao":  [(-2.3, 0), (-1.6, 8), (-1.2, 18), (-0.8, 32), (-0.29, 50),
+                    (0.2, 62), (0.6, 72), (1.0, 82), (1.4, 90), (2.0, 96),
+                    (2.8, 100)],
+    # NUPL proxy = 1 − MA200sem/preço. Topos: 0.94 · 0.82 · 0.75 · 0.55 ·
+    # 0.57. Fundos: 0.00 (2018) · -0.52 (2022) · 0.09 (fev/26).
+    "nupl_proxy":  [(-0.5, 0), (-0.2, 8), (0.0, 16), (0.15, 27), (0.30, 38),
+                    (0.44, 50), (0.55, 62), (0.65, 73), (0.75, 84),
+                    (0.85, 93), (0.95, 100)],
+    # % dos últimos 4 anos abaixo do preço de hoje (proxy de Supply in
+    # Profit). Satura perto de 100 em qualquer topo histórico novo.
+    "supply_lucro_proxy": [(48, 0), (58, 10), (66, 20), (72, 30), (79, 40),
+                           (85, 50), (90, 60), (94, 70), (97, 80), (99, 90),
+                           (100, 100)],
+    # Drawdown do topo histórico, em % (0 = no ATH). Fundos: -84 (2018) ·
+    # -77 (2022) · -49 (fev/26) — os ursos ficaram mais rasos.
+    "drawdown":    [(-85, 0), (-75, 8), (-65, 18), (-55, 30), (-46, 42),
+                    (-35, 55), (-25, 66), (-15, 77), (-8, 86), (-3, 94),
+                    (0, 100)],
+    # Mayer Multiple (preço/MM200d). Mediana histórica ~1.11 -> score 50.
+    # Topos: 3.6 (2017) · 1.9 (abr/21) · 1.5 (nov/21) · 1.8 (mar/24) ·
+    #        1.2 (out/25). Fundos: 0.51 · 0.71 · 0.62.
+    "mayer":       [(0.5, 0), (0.7, 10), (0.85, 22), (1.0, 36), (1.11, 50),
+                    (1.25, 62), (1.4, 71), (1.6, 80), (1.9, 89), (2.4, 96),
+                    (3.5, 100)],
+    # RSI mensal. ATENÇÃO: o BTC é enviesado para cima — a MEDIANA do RSI
+    # mensal é ~63, não 50, e nos fundos ele fica em 34-52 (raramente <30).
+    # A escala antiga (50 -> score 50) marcava fundo como "neutro".
+    "rsi_mensal":  [(25, 0), (35, 8), (45, 20), (52, 30), (58, 40), (63, 50),
+                    (68, 60), (73, 70), (80, 82), (88, 93), (95, 100)],
+    # Fear & Greed (0-100).
+    "fng":         [(5, 0), (20, 16), (35, 33), (50, 50), (65, 67),
+                    (80, 84), (92, 100)],
+    # Relógio do halving: dias desde o último halving (0..1460). Padrão
+    # histórico (2012/2016/2020/2024): topo ~1,5 ano DEPOIS do halving,
     # fundo ~1 ano ANTES do próximo.
     "halving":     [(0, 32), (180, 46), (350, 62), (520, 85), (560, 90),
                     (700, 62), (900, 38), (1100, 18), (1300, 22), (1460, 30)],
-
-    # --- Extras on-chain (entram como reforço quando existem) ------------
-    "puell":       [(0.3, 0), (0.5, 14), (0.8, 30), (1.2, 46),
-                    (2.0, 66), (3.0, 83), (4.5, 100)],
-    # Reserve Risk também em log10 (varia de ~0.0005 a ~0.02).
-    "reserve_log": [(-3.4, 0), (-3.1, 16), (-2.8, 34), (-2.5, 54),
-                    (-2.2, 74), (-1.9, 90), (-1.6, 100)],
 }
 
 
@@ -233,18 +279,30 @@ def serie_mvrv_proxy(preco: pd.DataFrame) -> pd.Series:
     return (s / serie_ma200w(preco)).rename("mvrv_proxy")
 
 
-def serie_z_extensao(preco: pd.DataFrame) -> pd.Series:
+def serie_z_extensao(preco: pd.DataFrame, janela: int = 1460) -> pd.Series:
     """
-    Proxy do MVRV Z-Score: z-score EXPANDIDO (só com dados do passado, sem
-    olhar o futuro) da razão preço/MA200W. Usar `expanding` em vez da série
-    inteira evita look-ahead bias no histórico e no backtest.
+    Proxy do MVRV Z-Score: z-score de **log(preço/MA200sem)** numa janela
+    MÓVEL de 4 anos (um ciclo).
+
+    Duas decisões que vieram da calibração contra a série real (2011-2026):
+
+    - **log**: a razão preço/MA200W é multiplicativa e assimétrica; sem o
+      log, o desvio-padrão é dominado pelas explosões de alta.
+    - **janela móvel de 1 ciclo, não `expanding`**: com janela expandida o
+      z-score ia MORRENDO a cada ciclo (marcava 5.9 no topo de 2013 e
+      **-0.17 no topo de out/2025** — ou seja, dizia "fundo" numa máxima
+      histórica). Com 4 anos móveis, os topos ficam em +0.5 a +2.8 e os
+      fundos em -0.8 a -2.2, comparáveis entre ciclos.
+
+    Continua sem look-ahead: cada dia só usa dados até ele.
     """
     r = serie_mvrv_proxy(preco).dropna()
     if r.empty:
         return pd.Series(dtype=float)
-    media = r.expanding(min_periods=180).mean()
-    desvio = r.expanding(min_periods=180).std()
-    return ((r - media) / desvio.replace(0, np.nan)).rename("z_extensao")
+    lr = np.log(r.where(r > 0))
+    media = lr.rolling(janela, min_periods=400).mean()
+    desvio = lr.rolling(janela, min_periods=400).std()
+    return ((lr - media) / desvio.replace(0, np.nan)).rename("z_extensao")
 
 
 def serie_nupl_proxy(preco: pd.DataFrame) -> pd.Series:
@@ -332,7 +390,9 @@ PILARES: list[dict] = [
                  "pela rede (market cap vs realized cap, padronizado).",
         "fontes": [
             ("mvrv_z", "mvrv_z", "MVRV Z-Score", "on-chain"),
-            ("z_extensao", "z_extensao", "Z preço/MA200W", "proxy"),
+            ("cm_mvrv_z", "mvrv_z", "MVRV Z-Score (Coin Metrics)", "on-chain"),
+            ("cm_mvrv", "mvrv", "MVRV (Coin Metrics)", "on-chain"),
+            ("z_extensao", "z_extensao", "Z log(preço/MA200sem), 4a", "proxy"),
         ],
     },
     {
@@ -341,7 +401,8 @@ PILARES: list[dict] = [
                  "está no prejuízo (capitulação); >0.75 = euforia.",
         "fontes": [
             ("nupl", "nupl", "NUPL", "on-chain"),
-            ("nupl_proxy", "nupl", "NUPL proxy (MA200W)", "proxy"),
+            ("cm_nupl", "nupl", "NUPL (Coin Metrics)", "on-chain"),
+            ("nupl_proxy", "nupl_proxy", "NUPL proxy (MA200sem)", "proxy"),
         ],
     },
     {
@@ -350,7 +411,8 @@ PILARES: list[dict] = [
                  "o atual. Perto de 100% costuma marcar euforia.",
         "fontes": [
             ("supply_lucro", "supply_lucro", "Supply in Profit", "on-chain"),
-            ("supply_lucro_proxy", "supply_lucro", "% dias abaixo (4a)", "proxy"),
+            ("supply_lucro_proxy", "supply_lucro_proxy", "% dias abaixo (4a)",
+             "proxy"),
         ],
     },
     {
@@ -360,6 +422,7 @@ PILARES: list[dict] = [
         "fontes": [
             ("rhodl_log", "rhodl_log", "RHODL Ratio", "on-chain"),
             ("reserve_log", "reserve_log", "Reserve Risk", "on-chain"),
+            ("cm_puell", "puell", "Puell Multiple (Coin Metrics)", "on-chain"),
             ("drawdown", "drawdown", "Drawdown do ATH", "proxy"),
         ],
     },
@@ -463,6 +526,100 @@ def buscar_series_onchain(metricas: list[str] | None = None) -> dict[str, pd.Dat
     return out
 
 
+# --------------------------------------------------------------------------
+# 5b) COIN METRICS — on-chain REAL, grátis e SEM CHAVE nenhuma
+# --------------------------------------------------------------------------
+# A Coin Metrics publica o dataset "community" do BTC como um CSV no GitHub.
+# É dado on-chain de verdade (market cap, realized cap, emissão) desde 2010,
+# sem cadastro e sem chave — o que permite calcular MVRV, MVRV Z-Score, NUPL
+# e Puell Multiple REAIS mesmo sem a chave da BGeometrics.
+#
+# Uso não comercial. Crédito: Coin Metrics Community Data.
+
+CM_URL = "https://raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv"
+CM_COLUNAS = ["time", "PriceUSD", "CapMrktCurUSD", "CapMVRVCur", "IssTotUSD"]
+CM_CACHE_TTL = 12 * 60 * 60  # o CSV é atualizado 1x/dia
+
+_CACHE_DIR_CM = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
+CM_CACHE = os.path.join(_CACHE_DIR_CM, "coinmetrics_btc.csv")
+
+
+def _cm_do_csv(caminho) -> pd.DataFrame:
+    """Lê o CSV da Coin Metrics e deriva as métricas de ciclo."""
+    df = pd.read_csv(caminho, usecols=CM_COLUNAS, parse_dates=["time"])
+    df = (df.rename(columns={"time": "date", "PriceUSD": "price"})
+          .dropna(subset=["price"]).sort_values("date").reset_index(drop=True))
+
+    mc = df.set_index("date")["CapMrktCurUSD"].astype(float)
+    mvrv = df.set_index("date")["CapMVRVCur"].astype(float)
+    rc = mc / mvrv.replace(0, np.nan)        # realized cap = market cap / MVRV
+
+    out = pd.DataFrame({"date": df["date"], "price": df["price"]})
+    out["cm_mvrv"] = mvrv.to_numpy()
+    # MVRV Z-Score = (market cap − realized cap) / desvio-padrão do market cap.
+    # `expanding` (só o passado) para o histórico não ter look-ahead.
+    out["cm_mvrv_z"] = ((mc - rc) / mc.expanding(min_periods=365).std()).to_numpy()
+    # NUPL = lucro não realizado / market cap = 1 − realized/market.
+    out["cm_nupl"] = (1.0 - 1.0 / mvrv.replace(0, np.nan)).to_numpy()
+    # Puell Multiple = emissão diária em USD / média de 365 dias dela.
+    iss = df.set_index("date")["IssTotUSD"].astype(float)
+    out["cm_puell"] = (iss / iss.rolling(365, min_periods=200).mean()).to_numpy()
+    return out
+
+
+def fetch_coinmetrics(usar_cache: bool = True) -> pd.DataFrame:
+    """
+    Baixa (ou lê do cache) o dataset da Coin Metrics e devolve
+    ['date','price','cm_mvrv','cm_mvrv_z','cm_nupl','cm_puell'].
+
+    O arquivo tem ~2,5 MB e fica cacheado em `cache/coinmetrics_btc.csv` por
+    12h. Qualquer falha devolve DataFrame vazio — o modelo cai nos proxies de
+    preço e o card mostra o selo "proxy". Nunca quebra o app.
+    """
+    if usar_cache and os.path.exists(CM_CACHE):
+        idade = time.time() - os.path.getmtime(CM_CACHE)
+        if idade < CM_CACHE_TTL:
+            try:
+                return _cm_do_csv(CM_CACHE)
+            except Exception:
+                pass  # cache corrompido: baixa de novo
+
+    try:
+        import requests
+        r = requests.get(CM_URL, timeout=60, headers={
+            "User-Agent": "btc-mood-tracker/1.0 (educational)"})
+        r.raise_for_status()
+        os.makedirs(_CACHE_DIR_CM, exist_ok=True)
+        with open(CM_CACHE, "wb") as f:
+            f.write(r.content)
+        return _cm_do_csv(CM_CACHE)
+    except Exception as e:
+        print(f"[Coin Metrics] indisponível: {e}")
+        if os.path.exists(CM_CACHE):   # sem rede: cache velho é melhor que nada
+            try:
+                return _cm_do_csv(CM_CACHE)
+            except Exception:
+                pass
+        return pd.DataFrame(columns=["date", "price", "cm_mvrv", "cm_mvrv_z",
+                                     "cm_nupl", "cm_puell"])
+
+
+def _preparar_cm(dados_cm: pd.DataFrame | None,
+                 indice: pd.DatetimeIndex) -> dict[str, pd.Series]:
+    """Alinha as séries da Coin Metrics ao índice diário do preço."""
+    if dados_cm is None or len(dados_cm) == 0:
+        return {}
+    base = dados_cm.set_index("date").sort_index()
+    prontas = {}
+    for col in ("cm_mvrv", "cm_mvrv_z", "cm_nupl", "cm_puell"):
+        if col in base.columns:
+            serie = base[col].astype(float).reindex(indice, method="ffill")
+            if not serie.dropna().empty:
+                prontas[col] = serie
+    return prontas
+
+
 def _preparar_onchain(series_onchain: dict | None,
                       indice: pd.DatetimeIndex) -> dict[str, pd.Series]:
     """
@@ -495,7 +652,8 @@ def _preparar_onchain(series_onchain: dict | None,
 # ==========================================================================
 
 def montar_series(preco: pd.DataFrame, fng: pd.DataFrame | None = None,
-                  series_onchain: dict | None = None) -> dict[str, pd.Series]:
+                  series_onchain: dict | None = None,
+                  dados_cm: pd.DataFrame | None = None) -> dict[str, pd.Series]:
     """
     Monta TODAS as séries de componentes (grátis + on-chain) alinhadas ao
     índice diário do preço. É a base tanto do snapshot de hoje quanto do
@@ -517,7 +675,8 @@ def montar_series(preco: pd.DataFrame, fng: pd.DataFrame | None = None,
         series["fng"] = (fng.set_index("date")["fng"].astype(float)
                          .sort_index().reindex(idx, method="ffill"))
 
-    series.update(_preparar_onchain(series_onchain, idx))
+    series.update(_preparar_cm(dados_cm, idx))          # Coin Metrics (grátis)
+    series.update(_preparar_onchain(series_onchain, idx))  # BGeometrics (chave)
     return series
 
 
@@ -558,7 +717,8 @@ def _sub_score_pilar(pilar: dict, series: dict[str, pd.Series]
 
 def serie_score(preco: pd.DataFrame, fng: pd.DataFrame | None = None,
                 series_onchain: dict | None = None,
-                pesos: dict[str, float] | None = None) -> pd.DataFrame:
+                pesos: dict[str, float] | None = None,
+                dados_cm: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Score de ciclo (0..100) AO LONGO DO TEMPO.
 
@@ -569,7 +729,7 @@ def serie_score(preco: pd.DataFrame, fng: pd.DataFrame | None = None,
     Retorna DataFrame ['date','price','score', <um coluna por pilar>].
     """
     s = _serie_preco(preco)
-    series = montar_series(preco, fng, series_onchain)
+    series = montar_series(preco, fng, series_onchain, dados_cm)
 
     num = pd.Series(0.0, index=s.index)
     den = pd.Series(0.0, index=s.index)
@@ -599,7 +759,9 @@ def serie_score(preco: pd.DataFrame, fng: pd.DataFrame | None = None,
 def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
              fng: pd.DataFrame | None = None,
              series_onchain: dict | None = None,
-             pesos: dict[str, float] | None = None) -> dict:
+             pesos: dict[str, float] | None = None,
+             dados_cm: pd.DataFrame | None = None,
+             usar_coinmetrics: bool = True) -> dict:
     """
     Snapshot do modelo HOJE: score, fase, composição por pilar e plano de
     posição. É o que alimenta o card visual.
@@ -624,9 +786,11 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
 
     if series_onchain is None:
         series_onchain = buscar_series_onchain()
+    if dados_cm is None and usar_coinmetrics:
+        dados_cm = fetch_coinmetrics()
 
     s = _serie_preco(preco)
-    series = montar_series(preco, fng_df, series_onchain)
+    series = montar_series(preco, fng_df, series_onchain, dados_cm)
 
     componentes, num, den, peso_total = [], 0.0, 0.0, 0.0
     tem_dado_onchain = False
@@ -669,7 +833,7 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
     # Momentum do ciclo: variação do score em 30 dias (usa o histórico).
     delta30 = float("nan")
     try:
-        hist = serie_score(preco, fng_df, series_onchain, pesos)
+        hist = serie_score(preco, fng_df, series_onchain, pesos, dados_cm)
         if len(hist) > 31:
             delta30 = float(hist["score"].iloc[-1] - hist["score"].iloc[-31])
     except Exception:
@@ -1134,6 +1298,22 @@ def _autoteste() -> int:
     checa(normalizar("mvrv_z", 99) == 100.0, "escala trava no teto (MVRV-Z altíssimo -> 100)")
     checa(normalizar("nupl", 0.0) < normalizar("nupl", 0.7), "NUPL é monotônico")
     checa(np.isnan(normalizar("sopr", None)), "valor ausente vira NaN")
+    faltando = [(pil["chave"], f[1]) for pil in PILARES for f in pil["fontes"]
+                if f[1] not in ESCALAS]
+    checa(not faltando, f"toda fonte de pilar aponta para uma escala existente "
+                        f"{faltando if faltando else ''}")
+    # Toda escala precisa ter os VALORES em ordem crescente (np.interp exige).
+    # O score também é crescente em todas, menos no relógio do halving — que
+    # sobe até ~1,5 ano depois do halving e cai depois, de propósito.
+    fora_de_ordem = [c for c, pts in ESCALAS.items()
+                     if [p[0] for p in pts] != sorted(p[0] for p in pts)]
+    checa(not fora_de_ordem, f"escalas com valores em ordem crescente "
+                             f"{fora_de_ordem if fora_de_ordem else ''}")
+    nao_monotonas = [c for c, pts in ESCALAS.items()
+                     if c != "halving"
+                     and [p[1] for p in pts] != sorted(p[1] for p in pts)]
+    checa(not nao_monotonas, f"escalas monotônicas no score (exceto halving) "
+                             f"{nao_monotonas if nao_monotonas else ''}")
 
     # --- snapshot ------------------------------------------------------
     res = calcular(preco, fng_atual=50.0, series_onchain={})

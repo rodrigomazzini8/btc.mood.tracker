@@ -31,6 +31,7 @@ preço) e visualizar tudo de forma clara.
 | Texto p/ IA | **Reddit** | `reddit.com/r/<sub>/new.json` | Precisa header `User-Agent`; só posts recentes |
 | Texto p/ IA (fallback) | **CryptoCompare News** | `min-api.cryptocompare.com/data/v2/news/` | Usado quando o Reddit bloqueia datacenters (na nuvem); grátis, sem chave |
 | On-chain (opcional) | **BGeometrics** (bitcoin-data.com) | `api.bgeometrics.com/v1/<metrica>?token=...` | MVRV, SOPR, MVRV Z-Score, NUPL, Puell, Reserve Risk. **Chave grátis** via `BGEO_API_KEY` (ver abaixo) |
+| On-chain (grátis, **sem chave**) | **Coin Metrics Community** | `raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv` | Market cap, realized cap e emissão desde 2010 → **MVRV, MVRV Z-Score, NUPL e Puell reais**. CSV de ~2,5 MB, cacheado 12h |
 
 ---
 
@@ -92,14 +93,21 @@ Cada pilar tem a métrica on-chain "de verdade" e um **fallback grátis**
 calculado só do preço — então o modelo **nunca fica mudo**, e a interface
 marca com o selo `PROXY` toda linha que está no fallback.
 
-| Pilar | Peso | On-chain (com `BGEO_API_KEY`) | Fallback grátis (só preço) |
-|-------|-----:|-------------------------------|----------------------------|
-| MVRV Z-Score | 22% | MVRV Z-Score | z-score da razão preço/MA200W |
-| NUPL | 20% | NUPL | `1 − MA200W/preço` |
-| Supply in Profit | 15% | Supply in Profit | % dos dias dos últimos 4 anos abaixo do preço atual |
-| RHODL Ratio | 13% | RHODL Ratio (ou Reserve Risk) | drawdown do topo histórico |
-| SOPR | 10% | SOPR (média 7d) | RSI mensal |
-| Ciclo & Sentimento | 20% | — | Mayer Multiple + Fear & Greed + relógio do halving |
+Cada pilar usa a **primeira fonte disponível**, nesta ordem: BGeometrics
+(com chave) → **Coin Metrics (grátis, sem chave)** → proxy calculado do preço.
+
+| Pilar | Peso | Com `BGEO_API_KEY` | Grátis, sem chave (Coin Metrics) | Fallback (só preço) |
+|-------|-----:|--------------------|----------------------------------|---------------------|
+| MVRV Z-Score | 22% | MVRV Z-Score | **MVRV Z-Score real** | z-score de log(preço/MA200sem), janela de 4 anos |
+| NUPL | 20% | NUPL | **NUPL real** | `1 − MA200sem/preço` |
+| Supply in Profit | 15% | Supply in Profit | — | % dos dias dos últimos 4 anos abaixo do preço atual |
+| RHODL Ratio | 13% | RHODL Ratio / Reserve Risk | **Puell Multiple real** | drawdown do topo histórico |
+| SOPR | 10% | SOPR (média 7d) | — | RSI mensal |
+| Ciclo & Sentimento | 20% | — | — | Mayer Multiple + Fear & Greed + relógio do halving |
+
+> MVRV Z-Score e NUPL saem os dois da relação *market cap ÷ realized cap* —
+> são pilares **correlacionados por construção** (42% do peso olhando a mesma
+> coisa por dois ângulos). É proposital, mas vale saber.
 
 Os proxies de MVRV/NUPL se apoiam num fato conhecido do mercado: a **média
 móvel de 200 semanas anda historicamente colada no realized price** (o custo
@@ -108,6 +116,66 @@ médio da rede). É aproximação, não a métrica real — por isso o selo.
 Se um pilar não tiver dado num dia, **o peso dele é redistribuído** entre os
 demais: o score continua na mesma escala 0–100 e o rodapé do card mostra
 quanto do peso total tinha dado (`% DO PESO`).
+
+### Calibração contra a história real
+
+Os limiares **não são chutados**: cada escala foi ajustada contra a série real
+do BTC de 2010 a 2026 (Coin Metrics), olhando o que cada métrica marcou em
+cada topo e fundo de ciclo. Rode você mesmo:
+
+```bash
+python scripts/07_calibracao.py            # com on-chain real
+python scripts/07_calibracao.py --so-proxy # só com os proxies de preço
+```
+
+Leitura do modelo nas viradas de ciclo (com on-chain da Coin Metrics):
+
+| Virada | Preço | Score | Fase |
+|--------|------:|------:|------|
+| Topo dez/2017 | $19.250 | 97 | EUFORIA |
+| Fundo dez/2018 | $3.185 | 11 | FUNDO PROFUNDO |
+| Crash covid mar/2020 | $5.628 | 16 | ACUMULAÇÃO |
+| Topo abr/2021 | $62.869 | 90 | EUFORIA |
+| Topo nov/2021 | $67.096 | 83 | EUFORIA |
+| Fundo nov/2022 | $15.778 | 9 | FUNDO PROFUNDO |
+| Topo mar/2024 | $71.505 | 79 | DISTRIBUIÇÃO |
+| Topo out/2025 | $124.824 | 72 | DISTRIBUIÇÃO |
+| Fundo fev/2026 | $63.495 | 21 | ACUMULAÇÃO |
+
+11 de 11 viradas caem na fase certa (topo em distribuição/euforia, fundo em
+fundo/acumulação), tanto com on-chain quanto só com os proxies.
+
+**O que a calibração revelou** (e que a primeira versão errava feio):
+
+1. **A amplitude do ciclo encolhe a cada ciclo.** MVRV Z-Score nos topos:
+   8,9 (2013) → 8,9 (2017) → 5,3 (abr/21) → 3,5 (nov/21) → 2,9 (mar/24) →
+   2,5 (out/25). Exigir "Z acima de 6" para chamar topo, como estava, nunca
+   mais dispararia. O mesmo vale para NUPL (0,80 → 0,56) e Mayer (3,6 → 1,2).
+2. **O proxy de MVRV estava quebrado.** O z-score com janela *expandida*
+   morria a cada ciclo: marcava **−0,17 no topo de out/2025**, ou seja, dizia
+   "fundo" numa máxima histórica. Trocado por z-score de `log(preço/MA200sem)`
+   numa janela **móvel de 4 anos**, que se mantém comparável entre ciclos.
+3. **RSI mensal do BTC tem mediana ~63, não 50.** A escala antiga (50 → score
+   50) lia os fundos de 2018 (RSI 49) como "neutro". Recalibrada pela
+   distribuição real.
+4. **Cada proxy precisa de escala própria.** Usar a escala da métrica real no
+   proxy dava leitura errada — as distribuições são diferentes.
+
+Backtest da curva de exposição (mesmo script), sem taxas:
+
+| Período | CAGR modelo | CAGR hold | Drawdown modelo | Drawdown hold |
+|---------|------------:|----------:|----------------:|--------------:|
+| desde 2011 | 43% | 125% | −80% | −93% |
+| desde 2015 | 40% | 62% | −66% | −84% |
+| desde 2018 | 25% | 23% | −66% | −81% |
+| desde 2021 | 16% | 20% | −66% | −77% |
+
+Honestamente: **no histórico completo o buy & hold ganha com folga** — a
+tendência de 15 anos domina qualquer tentativa de posicionar por ciclo. O
+modelo entrega **drawdown bem menor** e, do ciclo de 2018 pra cá, retorno
+parecido. E ele continua comprando na queda inteira (é um modelo de valor,
+não de momentum): em jun/2018 já estava 84% exposto com o BTC a $7,5k, antes
+de cair para $3,2k.
 
 ### Do score para a posição
 
@@ -127,15 +195,17 @@ seguir essa curva contra comprar e segurar (retorno, CAGR, drawdown, Sharpe).
 ### Como usar
 
 ```bash
-streamlit run dashboard.py        # aba "🔮 Cycle Model"
-python scripts/06_cycle_model.py  # terminal + exporta cycle_model.html
+streamlit run dashboard.py         # aba "🔮 Cycle Model"
+python scripts/06_cycle_model.py   # terminal + exporta cycle_model.html
+python scripts/07_calibracao.py    # confere o modelo nas viradas históricas
 python scripts/cycle_model.py --autoteste   # testa o modelo offline
 ```
 
-Sem chave, roda com os proxies. Com a `BGEO_API_KEY` (mesma chave grátis do
-termômetro, ver seção acima), os pilares trocam automaticamente para as
-métricas on-chain reais — e as métricas em comum **compartilham o cache** do
-termômetro, sem gastar requisição duas vezes.
+Sem chave nenhuma o modelo já roda com **MVRV, MVRV Z-Score, NUPL e Puell
+reais** (Coin Metrics) e proxies só onde não há fonte grátis. Com a
+`BGEO_API_KEY` (mesma chave grátis do termômetro, ver seção acima) entram
+também SOPR, RHODL e Supply in Profit — e as métricas em comum
+**compartilham o cache** do termômetro, sem gastar requisição duas vezes.
 
 > ⚠️ Limiares de fundo e de topo **mudam a cada ciclo** (o mercado amadurece,
 > a volatilidade cai). O modelo organiza a decisão; ele não prevê o futuro.
@@ -169,6 +239,7 @@ btc-mood-tracker/
     ├── 04_cache_defasagem.py   # cache CSV, média móvel, correlação defasada
     ├── 05_finbert.py           # FinBERT lendo texto real do Reddit, x preço
     ├── 06_cycle_model.py       # BTC Cycle Model no terminal + card HTML
+    ├── 07_calibracao.py        # confere o modelo nos topos/fundos reais
     ├── termometro.py           # score consolidado -2..+2 (indicadores soltos)
     └── cycle_model.py          # modelo de CICLO 0-100 + card visual + backtest
 ```
@@ -213,6 +284,7 @@ python scripts/04_cache_defasagem.py  # cache CSV + média móvel + correlação
 python scripts/01_simples_vader.py    # Reddit + VADER
 python scripts/05_finbert.py          # Reddit + FinBERT (baixa o modelo na 1ª vez)
 python scripts/06_cycle_model.py      # 🔮 score de ciclo 0-100 + cycle_model.html
+python scripts/07_calibracao.py       # 🎯 calibração do modelo x história real
 ```
 
 ### Dashboard interativo
@@ -273,6 +345,8 @@ Observações:
 - [x] Alertas visuais de zona (COMPRA FORTE / VENDA FORTE).
 - [ ] Mais fontes de humor (funding rate, dominância).
 - [x] Modelo de ciclo 0–100 (Cycle Model) com card visual e plano de posição.
+- [x] On-chain real **sem chave** (Coin Metrics) e escalas calibradas contra
+      os topos e fundos reais de 2011–2026.
 - [x] Exportar relatório HTML (card do Cycle Model, via script 06).
 - [ ] Exportar relatório em PDF.
 - [ ] Mais idiomas no sentimento (modelos multilíngues).
