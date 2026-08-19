@@ -27,3 +27,6 @@ models/
 .DS_Store
 .idea/
 .vscode/
+
+# --- Relatórios HTML gerados pelos scripts ---
+*.html

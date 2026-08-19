@@ -106,7 +106,59 @@ Indicadores calculados só do preço (sem chave):
 
 ---
 
-## 5) Pseudocódigo para o bot (mensagem diária)
+## 5) Cycle Model — como vira um SCORE de 0 a 100 (ponto do ciclo)
+
+Modelo diferente do termômetro: em vez de "compra/venda hoje", ele diz **onde
+no ciclo** o mercado está e **qual posição carregar**. Escala contínua
+(interpolação linear entre pontos, sem degraus), `0 = fundo`, `100 = euforia`.
+
+### Escalas (valor → sub-score 0..100, interpolando)
+
+```
+mvrv_z:        -1→0   0→10  1→26  2→42  3→56  4→70  5→82  6.5→93  8→100
+nupl:        -0.25→0   0→12  .25→32  .40→45  .50→58  .60→71  .70→86  .85→100
+supply_lucro:   45→0  55→12  65→25  75→40  85→58  92→74  96→88  99→100   (em %)
+rhodl (log10): 2.6→0  3.0→16  3.4→34  3.8→54  4.2→74  4.5→89  5.0→100
+sopr (MM7d):  0.95→0  0.98→16  1.00→35  1.01→50  1.02→65  1.035→80  1.08→100
+mayer:         0.6→0  0.8→14  1.0→30  1.3→46  1.7→62  2.2→79  3.5→100
+fng:             5→0   20→16   35→33   50→50   65→67   80→84   92→100
+halving (dias):  0→32  180→46  350→62  520→85  560→90  700→62  900→38  1100→18
+```
+
+Fora das pontas o valor "gruda" no extremo (0 ou 100).
+
+### Pilares e pesos (média ponderada só dos que TÊM dado)
+
+| Pilar | Peso | On-chain | Fallback grátis (só preço) |
+|-------|-----:|----------|----------------------------|
+| MVRV Z-Score | 0.22 | `mvrv-zscore` | z-score de `preço/MA200sem` |
+| NUPL | 0.20 | `nupl` | `1 − MA200sem/preço` |
+| Supply in Profit | 0.15 | `supply-in-profit` | % dos últimos 1460 dias com fechamento < preço de hoje |
+| RHODL Ratio | 0.13 | `rhodl-ratio` (ou `reserve-risk`) | drawdown do topo histórico (%) |
+| SOPR | 0.10 | `sopr` (MM 7d) | RSI mensal |
+| Ciclo & Sentimento | 0.20 | — | média de Mayer + Fear&Greed + relógio do halving |
+
+`score = Σ(sub_i × peso_i) / Σ(peso_i disponível)` — se um pilar falta, o peso
+dele é redistribuído (o score fica sempre em 0..100).
+
+Halvings de referência: `2012-11-28, 2016-07-09, 2020-05-11, 2024-04-20`.
+
+### Fases e gestão de posição
+
+```
+score <15  FUNDO PROFUNDO   |  15-35 ACUMULAÇÃO  |  35-60 EXPANSÃO
+60-80      DISTRIBUIÇÃO     |  >80   EUFORIA
+
+exposição-alvo (%): 0→100  15→100  30→92  45→80  60→62  70→45  80→30  90→16  100→8
+multiplicador DCA:  0→3.0  15→2.5  30→1.8  45→1.2  60→0.8  70→0.5  80→0.25  90→0
+```
+
+Para bot: mande **o score do fechamento semanal** (o modelo é de ciclo) e
+avise quando a **fase mudar** — não a cada oscilação diária.
+
+---
+
+## 6) Pseudocódigo para o bot (mensagem diária)
 
 ```
 1. preco = fetch_btc_price()            # cascata Binance/CC/CoinGecko
@@ -118,6 +170,8 @@ Indicadores calculados só do preço (sem chave):
 6. consolidado = média(scores)
 7. sinal = rótulo(consolidado)
 8. Telegram: "BTC $<preço> | Sinal: <sinal> (score <x.xx>) | F&G <n>"
+9. (opcional) ciclo = score 0-100 da seção 5 -> fase + exposição-alvo + DCA
+   Telegram: "Ciclo: <fase> (<score>/100) | alvo <exp>% em BTC | DCA <mult>x"
 ```
 
 Dicas para o bot:
@@ -128,7 +182,7 @@ Dicas para o bot:
 
 ---
 
-## 6) Aviso
+## 7) Aviso
 
 Tudo aqui é **educativo**. Sinais e correlações **não preveem** o futuro e
 **não são recomendação financeira ou de investimento**. Faça sua própria
