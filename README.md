@@ -31,7 +31,8 @@ preço) e visualizar tudo de forma clara.
 | Texto p/ IA | **Reddit** | `reddit.com/r/<sub>/new.json` | Precisa header `User-Agent`; só posts recentes |
 | Texto p/ IA (fallback) | **CryptoCompare News** | `min-api.cryptocompare.com/data/v2/news/` | Usado quando o Reddit bloqueia datacenters (na nuvem); grátis, sem chave |
 | On-chain (opcional) | **BGeometrics** (bitcoin-data.com) | `api.bgeometrics.com/v1/<metrica>?token=...` | MVRV, SOPR, MVRV Z-Score, NUPL, Puell, Reserve Risk. **Chave grátis** via `BGEO_API_KEY` (ver abaixo) |
-| On-chain (grátis, **sem chave**) | **Coin Metrics Community** | `raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv` | Market cap, realized cap e emissão desde 2010 → **MVRV, MVRV Z-Score, NUPL e Puell reais**. CSV de ~2,5 MB, cacheado 12h |
+| On-chain (grátis, **sem chave**) | **Coin Metrics Community API** | `community-api.coinmetrics.io/v4/timeseries/asset-metrics` | Market cap, realized cap e emissão desde 2010 → **MVRV, MVRV Z-Score, NUPL e Puell reais**, com 1 dia de atraso |
+| On-chain (offline) | **Snapshot no próprio repo** | `data/onchain_btc.csv` | Atualizado todo dia por um GitHub Action. Faz o app funcionar mesmo onde a API está bloqueada |
 
 ---
 
@@ -199,6 +200,37 @@ mostra o **score semanal** — o modelo é de ciclo, então a decisão deve ser
 tomada no fechamento da semana, não no ruído do dia. O **backtest** compara
 seguir essa curva contra comprar e segurar (retorno, CAGR, drawdown, Sharpe).
 
+### De onde vem o on-chain (e por que ele está sempre em dia)
+
+O primeiro desenho usava o CSV que a Coin Metrics publicava no GitHub. Ele
+**parou de ser atualizado em 24/05/2026** — e o modelo passou a casar um MVRV
+de maio com o preço de hoje. A correção foi trocar a cadeia de fontes:
+
+| # | Fonte | Atraso | Observação |
+|---|-------|--------|-----------|
+| 1 | **API community da Coin Metrics** | ~1 dia | Grátis, sem cadastro. Fonte primária |
+| 2 | **`data/onchain_btc.csv` (este repo)** | ~1 dia | Atualizado todo dia por GitHub Action |
+| 3 | CSV histórico no GitHub da Coin Metrics | congelado | Último recurso, só histórico |
+| 4 | Proxies calculados do preço | 0 | Quando nada respondeu |
+
+A busca **não para na primeira fonte que responder** — para na primeira que
+responder **e estiver em dia** (até 2 dias). Se nenhuma estiver, usamos a
+menos velha e avisamos.
+
+#### Atualização automática
+
+`.github/workflows/dados.yml` roda todo dia às 06:20 UTC, busca o on-chain
+(o runner do GitHub tem rede aberta), valida e commita `data/onchain_btc.csv`
+se mudou. Assim:
+
+- quem faz deploy (Streamlit Cloud, HF Spaces) recebe o dado junto com o
+  código, **sem depender da rede do servidor**;
+- se a fonte quebrar, o Action **falha e avisa** em vez de commitar dado ruim;
+- o CSV é arredondado antes de gravar, para o commit diário ser "uma linha a
+  mais" e o repositório não inchar.
+
+Rodar na mão: `python scripts/09_atualiza_dados.py`.
+
 ### Quando o dado on-chain atrasa
 
 Fonte de dado atrasa: fim de semana, manutenção, e às vezes semanas. O
@@ -294,6 +326,7 @@ btc-mood-tracker/
 ├── setup.cfg               # configuração do lint e dos testes
 ├── .github/workflows/ci.yml # lint + testes em 3 versões de Python
 ├── tests/                  # suíte offline (não acessa a rede)
+├── data/onchain_btc.csv    # snapshot on-chain, atualizado 1x/dia pelo CI
 ├── README.md
 ├── .gitignore              # ignora cache/, *.csv, *.png, __pycache__, modelos HF
 └── scripts/
@@ -306,6 +339,7 @@ btc-mood-tracker/
     ├── 06_cycle_model.py       # BTC Cycle Model no terminal + card HTML
     ├── 07_calibracao.py        # confere os modelos nos topos/fundos reais
     ├── 08_alerta.py            # alerta (com histerese) de mudança de fase
+    ├── 09_atualiza_dados.py    # baixa o on-chain e grava data/onchain_btc.csv
     ├── coinmetrics.py          # on-chain grátis sem chave (Coin Metrics)
     ├── termometro.py           # score consolidado -2..+2 (indicadores soltos)
     └── cycle_model.py          # modelo de CICLO 0-100 + card visual + backtest
@@ -445,6 +479,7 @@ Observações:
 - [x] Faixas do Termômetro recalibradas e on-chain grátis (sem chave) nele também.
 - [x] Suíte de testes offline + CI no GitHub Actions.
 - [x] Rebalanceamento (com banda de tolerância) e alerta de mudança de fase.
+- [x] On-chain com no máximo 1 dia de atraso, atualizado sozinho todo dia.
 - [ ] Mais fontes de humor (funding rate, dominância).
 - [x] Modelo de ciclo 0–100 (Cycle Model) com card visual e plano de posição.
 - [x] On-chain real **sem chave** (Coin Metrics) e escalas calibradas contra

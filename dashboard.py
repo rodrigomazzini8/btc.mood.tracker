@@ -463,7 +463,11 @@ with aba_ciclo:
                        "— a Coin Metrics não respondeu agora. Ela normalmente "
                        "traz MVRV, NUPL e Puell reais sem chave nenhuma.")
         else:
-            st.caption("On-chain real via **Coin Metrics** (grátis, sem chave). "
+            origem = {"api": "API community (ao vivo)",
+                      "snapshot": "snapshot do repositório (atualizado 1×/dia)",
+                      "cache": "cache local", "mirror": "CSV histórico"}.get(
+                          snap_ciclo.get("origem_onchain"), "—")
+            st.caption(f"Dado on-chain via **{origem}**. "
                        "Com `BGEO_API_KEY` entram também SOPR, RHODL e Supply "
                        "in Profit. MVRV Z-Score e NUPL saem da mesma relação "
                        "market cap ÷ realized cap — são pilares correlacionados "

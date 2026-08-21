@@ -8,6 +8,8 @@ on:
   # já cobre, e os dois juntos rodariam a suíte inteira duas vezes.
   push:
     branches: [main]
+    # O commit diário de dados não mexe em código: não precisa rodar a suíte.
+    paths-ignore: ["data/**", "**/*.md"]
   pull_request:
 
 # Push novo na mesma branch cancela a execução anterior (que já está obsoleta).

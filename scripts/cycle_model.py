@@ -533,7 +533,7 @@ def buscar_series_onchain(metricas: list[str] | None = None) -> dict[str, pd.Dat
 # quem já chamava `cycle_model.fetch_coinmetrics()`.
 
 fetch_coinmetrics = coinmetrics.fetch_coinmetrics
-CM_URL = coinmetrics.CM_URL
+CM_API = coinmetrics.CM_API
 
 
 # Por quantos dias, no máximo, um valor on-chain é carregado para a frente.
@@ -852,6 +852,8 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
         "cobertura": (den / peso_total * 100.0) if peso_total else 0.0,
         "fonte": "on-chain" if tem_dado_onchain else "proxy",
         "idades": idades,
+        "origem_onchain": (dados_cm.attrs.get("origem", "—")
+                           if dados_cm is not None and len(dados_cm) else "—"),
         "fontes_defasadas": defasadas,
         "atraso_max": max(idades.values()) if idades else 0,
         "delta30": delta30,

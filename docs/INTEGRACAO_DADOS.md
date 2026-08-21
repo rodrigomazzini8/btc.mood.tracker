@@ -73,8 +73,13 @@ GET https://api.bgeometrics.com/v1/mvrv?token=SEU_TOKEN
 Melhor fonte on-chain sem cadastro: a Coin Metrics publica o dataset
 "community" do BTC como CSV no GitHub.
 
-- **URL:** `https://raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv`
-- **Tamanho:** ~2,5 MB (série diária desde 2010). **Cacheie** por 12–24h.
+- **URL (recomendada, ~1 dia de atraso):**
+  `https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=PriceUSD,CapMrktCurUSD,CapMVRVCur,IssTotUSD&frequency=1d&page_size=10000&paging_from=start`
+  Resposta: `{"data":[{"time":"...","PriceUSD":"...",...}], "next_page_url": "..."}`
+  Siga `next_page_url` até acabar (com teto de páginas).
+- **URL (histórica, CONGELADA em 24/05/2026 — não use como fonte principal):**
+  `https://raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv`
+- **Tamanho:** ~2,5 MB (série diária desde 2010). **Cacheie** por 6–24h.
 - **Colunas usadas:** `time`, `PriceUSD`, `CapMrktCurUSD` (market cap),
   `CapMVRVCur` (MVRV), `IssTotUSD` (emissão do dia em USD).
 - **Uso não comercial.** Crédito: Coin Metrics Community Data.
@@ -90,8 +95,15 @@ NUPL         = 1 − 1/MVRV
 Puell        = IssTotUSD / média_365d(IssTotUSD)
 ```
 
-Bônus: o CSV também traz o **preço** (`PriceUSD`), então serve de fallback
-quando Binance/CoinGecko estiverem bloqueados no seu servidor.
+Bônus: a resposta também traz o **preço** (`PriceUSD`), então serve de
+fallback quando Binance/CoinGecko estiverem bloqueados no seu servidor.
+
+**Cheque o frescor sempre.** Fonte pública morre em silêncio: o CSV do GitHub
+parou em maio/2026 e continuou respondendo 200 com dado velho. Regra: escolha
+a fonte pela DATA do último registro, não pela primeira que responder; se
+nada estiver em dia, use a menos velha e avise. Se o seu servidor não alcança
+a API, faça como aqui — um job diário (GitHub Actions) busca e versiona um
+CSV pequeno, e o app lê do repositório.
 
 Não tem: SOPR, RHODL e Supply in Profit — para esses, só a BGeometrics
 (seção 3) ou um proxy.
