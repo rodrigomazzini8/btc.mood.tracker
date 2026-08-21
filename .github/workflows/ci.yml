@@ -4,9 +4,16 @@ name: CI
 # (nenhum teste acessa a rede), então não depende das APIs externas estarem
 # de pé nem gasta cota de nenhuma delas.
 on:
+  # `push` só na branch principal: numa branch de PR o evento `pull_request`
+  # já cobre, e os dois juntos rodariam a suíte inteira duas vezes.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+# Push novo na mesma branch cancela a execução anterior (que já está obsoleta).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   testes:
