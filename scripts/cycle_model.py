@@ -536,6 +536,18 @@ fetch_coinmetrics = coinmetrics.fetch_coinmetrics
 CM_URL = coinmetrics.CM_URL
 
 
+# Por quantos dias, no máximo, um valor on-chain é carregado para a frente.
+# As fontes publicam 1x/dia mas atrasam (fim de semana, manutenção, e às vezes
+# semanas). Carregar o último valor indefinidamente é o pior dos mundos: o
+# card mostraria um MVRV de meses atrás ao lado do preço de hoje, sem avisar.
+# Passando desse limite o dado vira "ausente" e o pilar cai no proxy de preço,
+# que está sempre em dia — e a interface diz que isso aconteceu.
+MAX_DIAS_CARREGO = 7
+
+# A partir de quantos dias de atraso a interface avisa.
+LIMITE_ALERTA_ATRASO = 3
+
+
 def _preparar_cm(dados_cm: pd.DataFrame | None,
                  indice: pd.DatetimeIndex) -> dict[str, pd.Series]:
     """Alinha as séries da Coin Metrics ao índice diário do preço."""
@@ -545,7 +557,8 @@ def _preparar_cm(dados_cm: pd.DataFrame | None,
     prontas = {}
     for col in ("cm_mvrv", "cm_mvrv_z", "cm_nupl", "cm_puell"):
         if col in base.columns:
-            serie = base[col].astype(float).reindex(indice, method="ffill")
+            serie = base[col].astype(float).reindex(
+                indice, method="ffill", limit=MAX_DIAS_CARREGO)
             if not serie.dropna().empty:
                 prontas[col] = serie
     return prontas
@@ -562,8 +575,8 @@ def _preparar_onchain(series_onchain: dict | None,
     for nome, df in (series_onchain or {}).items():
         if df is None or len(df) == 0:
             continue
-        s = (df.set_index("date")["valor"].astype(float)
-             .sort_index().reindex(indice, method="ffill"))
+        s = (df.set_index("date")["valor"].astype(float).sort_index()
+             .reindex(indice, method="ffill", limit=MAX_DIAS_CARREGO))
         if nome == "rhodl":
             prontas["rhodl_log"] = np.log10(s.where(s > 0))
         elif nome == "reserve_risk":
@@ -581,6 +594,49 @@ def _preparar_onchain(series_onchain: dict | None,
 # ==========================================================================
 # 6) O MODELO — séries de todos os componentes e o score composto
 # ==========================================================================
+
+# Nome amigável de cada fonte, para as mensagens de atraso.
+NOMES_FONTES = {
+    "cm": "Coin Metrics", "mvrv_z": "MVRV Z-Score (BGeometrics)",
+    "nupl": "NUPL (BGeometrics)", "sopr": "SOPR (BGeometrics)",
+    "supply_lucro": "Supply in Profit (BGeometrics)",
+    "rhodl": "RHODL (BGeometrics)", "reserve_risk": "Reserve Risk (BGeometrics)",
+    "puell": "Puell (BGeometrics)",
+}
+
+
+# Chave da série (como aparece nos pilares) -> de onde ela vem.
+FONTE_DA_SERIE = {
+    "cm_mvrv": "cm", "cm_mvrv_z": "cm", "cm_nupl": "cm", "cm_puell": "cm",
+    "mvrv_z": "mvrv_z", "nupl": "nupl", "sopr": "sopr",
+    "supply_lucro": "supply_lucro", "rhodl_log": "rhodl",
+    "reserve_log": "reserve_risk",
+}
+
+
+def idade_das_fontes(series_onchain: dict | None, dados_cm: pd.DataFrame | None,
+                     ate: pd.Timestamp) -> dict[str, int]:
+    """
+    Quantos dias de atraso tem cada fonte on-chain em relação a `ate`
+    (normalmente a última data de preço). Fonte ausente não entra no dict.
+
+    Serve para dois usos: marcar o atraso em cada linha do card e avisar
+    quando o on-chain ficou velho a ponto de o modelo ter caído no proxy.
+    """
+    idades: dict[str, int] = {}
+    ate = pd.Timestamp(ate).normalize()
+
+    if dados_cm is not None and len(dados_cm) > 0:
+        ultima = pd.Timestamp(dados_cm["date"].max()).normalize()
+        idades["cm"] = int((ate - ultima).days)
+
+    for nome, df in (series_onchain or {}).items():
+        if df is None or len(df) == 0 or "date" not in getattr(df, "columns", []):
+            continue
+        ultima = pd.Timestamp(df["date"].max()).normalize()
+        idades[nome] = int((ate - ultima).days)
+    return idades
+
 
 def montar_series(preco: pd.DataFrame, fng: pd.DataFrame | None = None,
                   series_onchain: dict | None = None,
@@ -722,6 +778,8 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
 
     s = _serie_preco(preco)
     series = montar_series(preco, fng_df, series_onchain, dados_cm)
+    hoje = pd.Timestamp(s.index[-1]).normalize()
+    idades = idade_das_fontes(series_onchain, dados_cm, hoje)
 
     componentes, num, den, peso_total = [], 0.0, 0.0, 0.0
     tem_dado_onchain = False
@@ -733,13 +791,20 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
         sub = float(sub_serie.dropna().iloc[-1]) if not sub_serie.dropna().empty \
             else float("nan")
 
-        # Valor bruto e rótulo da fonte efetivamente usada hoje.
+        # Fonte efetivamente usada HOJE. Repare no `.iloc[-1]`: interessa o
+        # valor do último dia, não o último valor que existiu algum dia. Uma
+        # fonte que parou de publicar fica NaN hoje (ver MAX_DIAS_CARREGO) e
+        # não pode ser anunciada como se estivesse alimentando o pilar.
         fonte_nome, fonte_tipo, valor = "—", "—", float("nan")
+        idade_fonte = None
         for u in usadas:
             bruta = series.get(u["serie"])
-            if bruta is not None and not bruta.dropna().empty:
-                fonte_nome, fonte_tipo = u["rotulo"], u["tipo"]
-                valor = float(bruta.dropna().iloc[-1])
+            if bruta is None or bruta.empty:
+                continue
+            atual = bruta.iloc[-1]
+            if atual is not None and np.isfinite(atual):
+                fonte_nome, fonte_tipo, valor = u["rotulo"], u["tipo"], float(atual)
+                idade_fonte = idades.get(FONTE_DA_SERIE.get(u["serie"], ""))
                 break
         if fonte_tipo == "on-chain":
             tem_dado_onchain = True
@@ -755,11 +820,18 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
             "valor": valor, "fonte": fonte_nome, "tipo": fonte_tipo,
             "rotulo": rotulo_pilar(pilar["chave"], sub),
             "sobre": pilar["sobre"], "ok": bool(ok),
+            "idade_dias": idade_fonte,
             "fontes_usadas": usadas,
         })
 
     score = (num / den) if den > 0 else float("nan")
     fase = fase_do_score(score)
+
+    # Fontes on-chain que existem mas pararam de atualizar: o pilar delas caiu
+    # no proxy e o usuário precisa saber disso (senão vê "proxy" sem entender).
+    defasadas = [{"fonte": nome, "idade": idade}
+                 for nome, idade in sorted(idades.items())
+                 if idade > MAX_DIAS_CARREGO]
 
     # Momentum do ciclo: variação do score em 30 dias (usa o histórico).
     delta30 = float("nan")
@@ -779,6 +851,9 @@ def calcular(preco: pd.DataFrame, fng_atual: float | None = None,
         "plano": plano_posicao(score),
         "cobertura": (den / peso_total * 100.0) if peso_total else 0.0,
         "fonte": "on-chain" if tem_dado_onchain else "proxy",
+        "idades": idades,
+        "fontes_defasadas": defasadas,
+        "atraso_max": max(idades.values()) if idades else 0,
         "delta30": delta30,
         "preco": float(s.iloc[-1]),
         "data": pd.Timestamp(s.index[-1]).to_pydatetime(),
@@ -1131,6 +1206,9 @@ def _linha_componente(comp: dict) -> str:
     tipo = comp.get("tipo", "")
     selo = ("" if tipo == "on-chain" else
             f'<span class="bcm-tag">{_html.escape(str(tipo))}</span>')
+    idade = comp.get("idade_dias")
+    if idade is not None and idade > LIMITE_ALERTA_ATRASO:
+        selo += f'<span class="bcm-tag bcm-tag-old">{int(idade)}d</span>'
     titulo = f'{comp.get("fonte", "")} · {comp.get("sobre", "")}'
     return f"""
   <div class="bcm-row" title="{_html.escape(titulo)}">
@@ -1191,6 +1269,10 @@ CSS_CARD = """
   align-items:center;gap:6px}
 .bcm-tag{font-size:8px;letter-spacing:1px;color:#7c858f;border:1px solid #2a3138;
   border-radius:4px;padding:1px 4px;text-transform:uppercase}
+.bcm-tag-old{color:#fbbf24;border-color:#fbbf2455}
+.bcm-atraso{display:flex;gap:8px;align-items:center;background:#2a210f;
+  border:1px solid #fbbf2444;border-radius:8px;padding:8px 12px;margin-top:16px;
+  font-size:11px;color:#fcd34d;line-height:1.5}
 .bcm-track{flex:1;height:7px;border-radius:99px;background:#20262c;overflow:hidden}
 .bcm-fill{height:100%;border-radius:99px}
 .bcm-row-rot{flex:0 0 142px;text-align:right;font-size:9px;letter-spacing:1.4px;
@@ -1240,6 +1322,25 @@ def card_html(res: dict, incluir_css: bool = True, versao: str = "v1") -> str:
     seta = "" if not np.isfinite(delta) else (
         f" · <b>{delta:+.0f}</b> EM 30D")
 
+    # Aviso de dado on-chain velho. Sem isso, o card mostraria um proxy sem
+    # explicar por quê (ou, pior, um MVRV de meses atrás ao lado do preço de
+    # hoje — que é o que acontecia antes do limite de carregamento).
+    defasadas = res.get("fontes_defasadas") or []
+    aviso_atraso = ""
+    if defasadas:
+        nomes = ", ".join(
+            f"{NOMES_FONTES.get(d['fonte'], d['fonte'])} ({d['idade']}d)"
+            for d in defasadas)
+        aviso_atraso = (
+            f'<div class="bcm-atraso">⚠️ <span>On-chain atrasado — '
+            f'{_html.escape(nomes)}. Os pilares afetados caíram nos proxies de '
+            f'preço, que estão em dia. Leitura ainda válida, com menos '
+            f'informação.</span></div>')
+
+    atraso_rodape = ("" if not defasadas else
+                     f" · <b>ON-CHAIN {max(d['idade'] for d in defasadas)}D "
+                     f"ATRASADO</b>")
+
     css = CSS_CARD if incluir_css else ""
     return f"""{css}
 <div class="bcm-card">
@@ -1270,6 +1371,7 @@ def card_html(res: dict, incluir_css: bool = True, versao: str = "v1") -> str:
     </div>
   </div>
   {_barra_fases(score)}
+  {aviso_atraso}
   <div class="bcm-plano" style="border-left-color:{cor}">
     <div class="bcm-plano-acao" style="color:{cor}">
       {_html.escape(str(plano.get("acao", "—")))}</div>
@@ -1279,7 +1381,8 @@ def card_html(res: dict, incluir_css: bool = True, versao: str = "v1") -> str:
     <div>DCA ADAPTATIVO <b>{plano.get('dca', float('nan')):.2f}×</b></div>
     <div>EXPOSIÇÃO-ALVO <b>{plano.get('exposicao_alvo', float('nan')):.0f}%</b></div>
     <div>REALIZADO <b>{plano.get('realizado_alvo', float('nan')):.0f}%</b></div>
-    <div>FONTE <b>{_html.escape(fonte.upper())}</b> · {cobertura:.0f}% DO PESO{seta}</div>
+    <div>FONTE <b>{_html.escape(fonte.upper())}</b> · {cobertura:.0f}% DO PESO
+         {seta}{atraso_rodape}</div>
     <div>{carimbo}</div>
   </div>
 </div>"""
@@ -1356,7 +1459,10 @@ def _autoteste() -> int:
                              f"{nao_monotonas if nao_monotonas else ''}")
 
     # --- snapshot ------------------------------------------------------
-    res = calcular(preco, fng_atual=50.0, series_onchain={})
+    # `usar_coinmetrics=False`: o autoteste tem de ser hermético. Sem isso ele
+    # misturaria o on-chain REAL (do cache) com o preço SINTÉTICO daqui.
+    res = calcular(preco, fng_atual=50.0, series_onchain={},
+                   usar_coinmetrics=False)
     checa(0 <= res["score"] <= 100, f"score dentro de 0..100 (={res['score']:.1f})")
     checa(res["fase"] in [f[1] for f in FASES], f"fase válida ({res['fase']})")
     checa(len(res["componentes"]) == len(PILARES), "um componente por pilar")

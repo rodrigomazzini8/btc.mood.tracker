@@ -249,6 +249,20 @@ Implementado em `cycle_model.fase_confirmada()` e usado pelo
 `scripts/08_alerta.py`, que aceita `ALERTA_WEBHOOK` (a URL do `sendMessage`
 do bot do Telegram funciona direto).
 
+### Frescor do dado (não faça ffill infinito)
+
+Toda fonte on-chain atrasa em algum momento. Carregar o último valor
+indefinidamente cola um MVRV velho no preço de hoje e produz um score
+falsamente preciso. Regra usada aqui:
+
+```
+carregue o último valor on-chain por no máximo 7 dias
+passando disso: trate como AUSENTE -> o pilar cai no proxy de preço
+                e avise o usuário (nome da fonte + dias de atraso)
+```
+
+Implementado em `cycle_model.MAX_DIAS_CARREGO` e `idade_das_fontes()`.
+
 ### Do score para a posição do usuário
 
 ```

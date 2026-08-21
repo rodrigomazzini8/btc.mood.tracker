@@ -199,6 +199,23 @@ mostra o **score semanal** — o modelo é de ciclo, então a decisão deve ser
 tomada no fechamento da semana, não no ruído do dia. O **backtest** compara
 seguir essa curva contra comprar e segurar (retorno, CAGR, drawdown, Sharpe).
 
+### Quando o dado on-chain atrasa
+
+Fonte de dado atrasa: fim de semana, manutenção, e às vezes semanas. O
+comportamento ingênuo — carregar o último valor conhecido para a frente —
+é o pior possível: o card mostraria um **MVRV de meses atrás ao lado do
+preço de hoje**, sem avisar ninguém.
+
+O modelo carrega um valor on-chain por no máximo **7 dias**. Passando disso:
+
+1. o dado vira *ausente*, e o pilar **cai no proxy de preço**, que está sempre
+   em dia (o peso continua valendo, só muda a fonte);
+2. o card e o dashboard **dizem** que isso aconteceu, com o nome da fonte e o
+   tamanho do atraso;
+3. as linhas afetadas ganham o selo `PROXY` e a idade do dado em dias.
+
+Ou seja: a leitura fica mais pobre, mas nunca falsa.
+
 ### Do score para a MINHA posição
 
 Saber que o ciclo está em ACUMULAÇÃO não diz quanto comprar **hoje, com o que

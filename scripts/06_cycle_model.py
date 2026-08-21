@@ -80,6 +80,13 @@ def main() -> None:
                       series_onchain=series_oc, dados_cm=dados_cm)
 
     # ---------------- saída no terminal ----------------
+    if res.get("fontes_defasadas"):
+        atrasos = ", ".join(
+            f"{cm.NOMES_FONTES.get(d['fonte'], d['fonte'])} ({d['idade']}d)"
+            for d in res["fontes_defasadas"])
+        print(f"\n   ⚠️  On-chain atrasado: {atrasos}")
+        print("      Os pilares afetados voltaram para os proxies de preço.")
+
     print("\n" + "=" * 68)
     print(f"   SCORE DE CICLO: {res['score']:.1f}/100   ->   {res['fase']}")
     print(f"   {res['descricao']}")

@@ -319,3 +319,88 @@ def test_histerese_evita_alerta_diario():
         trocas += nova != fase
         fase = nova
     assert trocas == 1
+
+
+# --------------------------------------------------- frescor dos dados
+
+def _dados_cm_falsos(datas, mvrv_z=1.0):
+    """Dataset mínimo no formato que `calcular` espera da Coin Metrics."""
+    return pd.DataFrame({
+        "date": datas,
+        "price": np.linspace(10_000, 60_000, len(datas)),
+        "cm_mvrv": np.full(len(datas), 2.0),
+        "cm_mvrv_z": np.full(len(datas), float(mvrv_z)),
+        "cm_nupl": np.full(len(datas), 0.4),
+        "cm_puell": np.full(len(datas), 1.0),
+    })
+
+
+def test_idade_das_fontes(preco_sintetico):
+    fim = preco_sintetico["date"].max()
+    datas = pd.date_range(end=fim - pd.Timedelta(days=10), periods=400, freq="D")
+    idades = cm.idade_das_fontes(
+        {"sopr": pd.DataFrame({"date": datas, "valor": 1.0})},
+        _dados_cm_falsos(datas), ate=fim)
+    assert idades == {"cm": 10, "sopr": 10}
+
+
+def test_onchain_recente_alimenta_o_pilar(preco_sintetico):
+    """Atraso dentro do limite: o dado on-chain continua valendo."""
+    fim = preco_sintetico["date"].max()
+    datas = pd.date_range(end=fim - pd.Timedelta(days=2), periods=800, freq="D")
+    res = cm.calcular(preco_sintetico, fng_atual=50.0, series_onchain={},
+                      dados_cm=_dados_cm_falsos(datas))
+    valuation = next(c for c in res["componentes"] if c["chave"] == "valuation")
+    assert valuation["tipo"] == "on-chain"
+    assert valuation["idade_dias"] == 2
+    assert res["fontes_defasadas"] == []
+
+
+def test_onchain_velho_cai_no_proxy_e_avisa(preco_sintetico):
+    """
+    O caso que motivou tudo isso: a fonte parou de publicar há meses. Casar
+    esse MVRV com o preço de hoje seria pior do que não ter MVRV.
+    """
+    fim = preco_sintetico["date"].max()
+    datas = pd.date_range(end=fim - pd.Timedelta(days=90), periods=800, freq="D")
+    res = cm.calcular(preco_sintetico, fng_atual=50.0, series_onchain={},
+                      dados_cm=_dados_cm_falsos(datas))
+
+    valuation = next(c for c in res["componentes"] if c["chave"] == "valuation")
+    assert valuation["tipo"] == "proxy"          # caiu no proxy de preço
+    assert valuation["ok"]                       # e continua tendo leitura
+    assert res["fonte"] == "proxy"
+    assert res["atraso_max"] == 90
+    assert res["fontes_defasadas"] == [{"fonte": "cm", "idade": 90}]
+    assert 0 <= res["score"] <= 100
+
+
+def test_card_avisa_o_atraso(preco_sintetico):
+    fim = preco_sintetico["date"].max()
+    datas = pd.date_range(end=fim - pd.Timedelta(days=45), periods=800, freq="D")
+    res = cm.calcular(preco_sintetico, fng_atual=50.0, series_onchain={},
+                      dados_cm=_dados_cm_falsos(datas))
+    html = cm.card_html(res)
+    assert "On-chain atrasado" in html
+    assert "Coin Metrics (45d)" in html
+
+
+def test_card_sem_aviso_quando_esta_em_dia(preco_sintetico):
+    res = cm.calcular(preco_sintetico, fng_atual=50.0, series_onchain={},
+                      usar_coinmetrics=False)
+    assert "On-chain atrasado" not in cm.card_html(res)
+
+
+def test_ffill_limitado_no_historico(preco_sintetico):
+    """
+    O corte também vale para o histórico: um buraco maior que o limite não
+    pode ser preenchido com o último valor conhecido.
+    """
+    idx = pd.DatetimeIndex(preco_sintetico["date"])
+    datas = idx[:-60]                                   # some nos últimos 60 dias
+    series = cm.montar_series(preco_sintetico, None, None,
+                              _dados_cm_falsos(datas))
+    mvrv_z = series["cm_mvrv_z"]
+    # carrega por MAX_DIAS_CARREGO dias e depois vira NaN
+    assert np.isfinite(mvrv_z.iloc[-60 + cm.MAX_DIAS_CARREGO - 1])
+    assert not np.isfinite(mvrv_z.iloc[-1])

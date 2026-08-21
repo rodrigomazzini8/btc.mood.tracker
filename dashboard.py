@@ -447,6 +447,17 @@ with aba_ciclo:
         c4.metric("DCA adaptativo", f"{plano_c['dca']:.2f}×",
                   "do aporte normal", delta_color="off")
 
+        defasadas_ciclo = snap_ciclo.get("fontes_defasadas") or []
+        if defasadas_ciclo:
+            nomes = ", ".join(
+                f"**{cm.NOMES_FONTES.get(d['fonte'], d['fonte'])}** "
+                f"({d['idade']} dias)" for d in defasadas_ciclo)
+            st.warning(
+                f"On-chain atrasado: {nomes}. Em vez de casar um dado velho "
+                "com o preço de hoje, o modelo devolveu esses pilares para os "
+                "proxies de preço — que estão em dia. A leitura continua "
+                "válida, só com menos informação.")
+
         if snap_ciclo["fonte"] != "on-chain":
             st.caption("Rodando com os **proxies grátis** (calculados do preço) "
                        "— a Coin Metrics não respondeu agora. Ela normalmente "
