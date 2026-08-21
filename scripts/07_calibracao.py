@@ -156,8 +156,71 @@ def main() -> None:
                   f"{m['dd_max']*100:>10.1f}%{hold['dd_max']*100:>8.1f}%"
                   f"{m['sharpe']:>12.2f}{hold['sharpe']:>13.2f}")
 
+    # ---------------- termômetro (-2..+2) ----------------
+    calibrar_termometro(preco)
+
     print("\n   ⚠️  Calibrado com o passado. Os limiares de fundo e topo mudam "
           "a cada ciclo.\n   Não é recomendação financeira.")
+
+
+# Faixas ANTES da recalibração — ficam aqui só para mostrar o problema que a
+# conferência com dados reais revelou (nos topos de 2024 e 2025 elas diziam
+# "NEUTRO"). O código de produção usa `termometro.FAIXAS`.
+FAIXAS_ANTIGAS = {
+    "mayer":      [(0.8, 2), (1.0, 1), (1.5, 0), (2.4, -1), (float("inf"), -2)],
+    "ma200w":     [(1.0, 2), (1.5, 1), (3.0, 0), (5.0, -1), (float("inf"), -2)],
+    "rsi_mensal": [(30, 2), (45, 1), (60, 0), (70, -1), (float("inf"), -2)],
+    "mvrv":       [(1.0, 2), (1.5, 1), (2.5, 0), (3.5, -1), (float("inf"), -2)],
+    "mvrv_z":     [(0.0, 2), (2.0, 1), (4.0, 0), (6.0, -1), (float("inf"), -2)],
+    "nupl":       [(0.0, 2), (0.25, 1), (0.5, 0), (0.75, -1), (float("inf"), -2)],
+    "puell":      [(0.5, 2), (1.0, 1), (2.0, 0), (4.0, -1), (float("inf"), -2)],
+}
+
+SINAL_OK = {
+    "topo": {"VENDA", "VENDA FORTE"},
+    "fundo": {"COMPRA", "COMPRA FORTE"},
+}
+
+
+def calibrar_termometro(preco: pd.DataFrame) -> None:
+    """
+    Mesma conferência, agora para o Termômetro (-2..+2): qual sinal ele teria
+    dado em cada virada, com as faixas novas e com as antigas.
+    """
+    import termometro as term
+
+    print("\n   TERMÔMETRO (-2..+2) NAS MESMAS VIRADAS")
+    hist = term.serie_score_historico(preco, fng=None, incluir_onchain=True)
+    if hist.empty:
+        print("     (sem histórico suficiente)")
+        return
+
+    faixas_novas = dict(term.FAIXAS)
+    acertos = {"faixas novas": 0, "faixas antigas": 0}
+    total = 0
+    print(f"   {'marco':<16}{'preço':>10}{'faixas novas':>24}{'faixas antigas':>24}")
+    for rotulo, data, tipo in MARCOS:
+        linha = _linha_hist(hist, data)
+        if linha is None:
+            continue
+        total += 1
+        txt = f"   {rotulo:<16}{linha['price']:>10,.0f}"
+        for nome, faixas in (("faixas novas", faixas_novas),
+                             ("faixas antigas", FAIXAS_ANTIGAS)):
+            term.FAIXAS = {**faixas_novas, **faixas}  # antigas só onde existem
+            h = term.serie_score_historico(preco, fng=None, incluir_onchain=True)
+            l2 = _linha_hist(h, data)
+            sinal = term.score_para_sinal(l2["score"])
+            ok = "ok " if sinal in SINAL_OK[tipo] else "XX "
+            acertos[nome] += 1 if sinal in SINAL_OK[tipo] else 0
+            txt += f"{ok + f'{l2.score:5.2f} ' + sinal:>24}"
+        print(txt)
+    term.FAIXAS = faixas_novas  # devolve as faixas de produção
+
+    print(f"\n   Acertos de sinal (topo em venda, fundo em compra), "
+          f"de {total} marcos:")
+    for nome, n in acertos.items():
+        print(f"     {nome:<16} {n}/{total}")
 
 
 if __name__ == "__main__":

@@ -58,11 +58,10 @@ modelagem de ciclo. Modelos de ciclo erram, e os limiares de "fundo" e
 
 from __future__ import annotations
 
-import os
-import time
-
 import numpy as np
 import pandas as pd
+
+import coinmetrics  # fonte on-chain grátis (Coin Metrics Community)
 
 try:  # o modelo reaproveita o cache/rede on-chain que o termômetro já tem
     import termometro as term
@@ -527,82 +526,14 @@ def buscar_series_onchain(metricas: list[str] | None = None) -> dict[str, pd.Dat
 
 
 # --------------------------------------------------------------------------
-# 5b) COIN METRICS — on-chain REAL, grátis e SEM CHAVE nenhuma
+# 5b) COIN METRICS — on-chain REAL, grátis e SEM CHAVE (ver coinmetrics.py)
 # --------------------------------------------------------------------------
-# A Coin Metrics publica o dataset "community" do BTC como um CSV no GitHub.
-# É dado on-chain de verdade (market cap, realized cap, emissão) desde 2010,
-# sem cadastro e sem chave — o que permite calcular MVRV, MVRV Z-Score, NUPL
-# e Puell Multiple REAIS mesmo sem a chave da BGeometrics.
-#
-# Uso não comercial. Crédito: Coin Metrics Community Data.
+# O download/cache do dataset mora em `coinmetrics.py`, para o termômetro
+# usar a mesma fonte sem duplicar código. Reexportamos aqui para não quebrar
+# quem já chamava `cycle_model.fetch_coinmetrics()`.
 
-CM_URL = "https://raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv"
-CM_COLUNAS = ["time", "PriceUSD", "CapMrktCurUSD", "CapMVRVCur", "IssTotUSD"]
-CM_CACHE_TTL = 12 * 60 * 60  # o CSV é atualizado 1x/dia
-
-_CACHE_DIR_CM = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
-CM_CACHE = os.path.join(_CACHE_DIR_CM, "coinmetrics_btc.csv")
-
-
-def _cm_do_csv(caminho) -> pd.DataFrame:
-    """Lê o CSV da Coin Metrics e deriva as métricas de ciclo."""
-    df = pd.read_csv(caminho, usecols=CM_COLUNAS, parse_dates=["time"])
-    df = (df.rename(columns={"time": "date", "PriceUSD": "price"})
-          .dropna(subset=["price"]).sort_values("date").reset_index(drop=True))
-
-    mc = df.set_index("date")["CapMrktCurUSD"].astype(float)
-    mvrv = df.set_index("date")["CapMVRVCur"].astype(float)
-    rc = mc / mvrv.replace(0, np.nan)        # realized cap = market cap / MVRV
-
-    out = pd.DataFrame({"date": df["date"], "price": df["price"]})
-    out["cm_mvrv"] = mvrv.to_numpy()
-    # MVRV Z-Score = (market cap − realized cap) / desvio-padrão do market cap.
-    # `expanding` (só o passado) para o histórico não ter look-ahead.
-    out["cm_mvrv_z"] = ((mc - rc) / mc.expanding(min_periods=365).std()).to_numpy()
-    # NUPL = lucro não realizado / market cap = 1 − realized/market.
-    out["cm_nupl"] = (1.0 - 1.0 / mvrv.replace(0, np.nan)).to_numpy()
-    # Puell Multiple = emissão diária em USD / média de 365 dias dela.
-    iss = df.set_index("date")["IssTotUSD"].astype(float)
-    out["cm_puell"] = (iss / iss.rolling(365, min_periods=200).mean()).to_numpy()
-    return out
-
-
-def fetch_coinmetrics(usar_cache: bool = True) -> pd.DataFrame:
-    """
-    Baixa (ou lê do cache) o dataset da Coin Metrics e devolve
-    ['date','price','cm_mvrv','cm_mvrv_z','cm_nupl','cm_puell'].
-
-    O arquivo tem ~2,5 MB e fica cacheado em `cache/coinmetrics_btc.csv` por
-    12h. Qualquer falha devolve DataFrame vazio — o modelo cai nos proxies de
-    preço e o card mostra o selo "proxy". Nunca quebra o app.
-    """
-    if usar_cache and os.path.exists(CM_CACHE):
-        idade = time.time() - os.path.getmtime(CM_CACHE)
-        if idade < CM_CACHE_TTL:
-            try:
-                return _cm_do_csv(CM_CACHE)
-            except Exception:
-                pass  # cache corrompido: baixa de novo
-
-    try:
-        import requests
-        r = requests.get(CM_URL, timeout=60, headers={
-            "User-Agent": "btc-mood-tracker/1.0 (educational)"})
-        r.raise_for_status()
-        os.makedirs(_CACHE_DIR_CM, exist_ok=True)
-        with open(CM_CACHE, "wb") as f:
-            f.write(r.content)
-        return _cm_do_csv(CM_CACHE)
-    except Exception as e:
-        print(f"[Coin Metrics] indisponível: {e}")
-        if os.path.exists(CM_CACHE):   # sem rede: cache velho é melhor que nada
-            try:
-                return _cm_do_csv(CM_CACHE)
-            except Exception:
-                pass
-        return pd.DataFrame(columns=["date", "price", "cm_mvrv", "cm_mvrv_z",
-                                     "cm_nupl", "cm_puell"])
+fetch_coinmetrics = coinmetrics.fetch_coinmetrics
+CM_URL = coinmetrics.CM_URL
 
 
 def _preparar_cm(dados_cm: pd.DataFrame | None,

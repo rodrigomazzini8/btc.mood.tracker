@@ -38,6 +38,43 @@ import cycle_model as cm  # noqa: E402  (score de CICLO 0-100, com card visual)
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="BTC Mood Tracker", page_icon="📈", layout="wide")
 
+# --------------------------------------------------------------------------
+# Compatibilidade de largura entre versões do Streamlit
+# --------------------------------------------------------------------------
+# O `use_container_width=True` foi depreciado (removido depois de 2025-12-31)
+# em favor de `width="stretch"`, que só existe nas versões novas. Como o
+# requirements aceita streamlit>=1.28, escolhemos o argumento certo em tempo
+# de execução em vez de fixar um dos dois.
+
+
+def _versao_streamlit() -> tuple:
+    try:
+        partes = str(st.__version__).split(".")
+        return int(partes[0]), int(partes[1])
+    except Exception:
+        return (0, 0)
+
+
+_LARGURA_NOVA = _versao_streamlit() >= (1, 50)
+
+
+def _largura() -> dict:
+    """kwargs para o componente ocupar a largura toda do container."""
+    return {"width": "stretch"} if _LARGURA_NOVA else {"use_container_width": True}
+
+
+def _html_em_iframe(html: str, altura: int) -> None:
+    """
+    Renderiza HTML próprio dentro de um iframe (para o CSS do card não brigar
+    com o tema do Streamlit). `st.components.v1.html` foi depreciado em favor
+    de `st.iframe`; usamos o que existir na versão instalada.
+    """
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=altura)
+    else:
+        components.html(html, height=altura, scrolling=True)
+
+
 # Paleta do tema escuro.
 LARANJA = "#f7931a"
 VERDE = "#26a69a"
@@ -288,8 +325,9 @@ snapshot = carregar_snapshot_termometro(periodo, float(fng_atual), onchain_tuple
 # ==========================================================================
 with st.expander("⚙️ Configurar indicadores do termômetro"):
     if not term.tem_chave_onchain():
-        st.caption("On-chain (MVRV, SOPR, NUPL, Puell...) aparecem ao definir a "
-                   "chave grátis `BGEO_API_KEY` (api.bgeometrics.com).")
+        st.caption("MVRV, MVRV Z-Score, NUPL e Puell vêm de graça da **Coin "
+                   "Metrics** (sem chave). Com a chave grátis `BGEO_API_KEY` "
+                   "(api.bgeometrics.com) entram também SOPR e Reserve Risk.")
     modo_pesos = st.toggle("⚖️ Ajustar pesos por indicador", value=False,
                            help="Desligado = média simples.")
 
@@ -314,7 +352,7 @@ with st.expander("⚙️ Configurar indicadores do termômetro"):
         for i, row in enumerate(gratis.itertuples()):
             _render_indicador(cols_g[i], row)
     if not onchain.empty:
-        st.caption("On-chain (BGeometrics)")
+        st.caption("On-chain (Coin Metrics grátis · BGeometrics com chave)")
         cols_o = st.columns(min(4, len(onchain)))
         for i, row in enumerate(onchain.itertuples()):
             _render_indicador(cols_o[i % len(cols_o)], row)
@@ -395,7 +433,7 @@ with aba_ciclo:
     else:
         # --- O card visual (HTML+SVG). Vai num iframe para o CSS do card não
         #     brigar com o tema do Streamlit.
-        components.html(cm.card_html(snap_ciclo), height=680, scrolling=True)
+        _html_em_iframe(cm.card_html(snap_ciclo), altura=680)
 
         plano_c = snap_ciclo["plano"]
         c1, c2, c3, c4 = st.columns(4)
@@ -446,7 +484,7 @@ with aba_ciclo:
             figc.update_yaxes(range=[0, 100], row=2, col=1)
             figc.update_layout(template="plotly_dark", height=560, showlegend=False,
                                margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(figc, use_container_width=True)
+            st.plotly_chart(figc, **_largura())
 
             # --- Leitura semanal (o modelo é de ciclo: decida no fim de semana).
             sem = cm.serie_semanal(hist_ciclo).tail(12).iloc[::-1]
@@ -461,7 +499,7 @@ with aba_ciclo:
                     "DCA": sem["score"].map(lambda v: f"{cm.multiplicador_dca(v):.2f}×"),
                 })
                 st.markdown("**Score semanal** — uma decisão por semana, no máximo.")
-                st.dataframe(sem_show, use_container_width=True, hide_index=True)
+                st.dataframe(sem_show, **_largura(), hide_index=True)
 
             # --- Backtest da curva de exposição.
             btc_ = cm.backtest_exposicao(hist_ciclo)
@@ -489,7 +527,7 @@ with aba_ciclo:
                                         title="Capital acumulado (1 = início)",
                                         legend=dict(orientation="h", y=1.14),
                                         yaxis_title="Múltiplo do capital")
-                    st.plotly_chart(figbc, use_container_width=True)
+                    st.plotly_chart(figbc, **_largura())
                     st.caption("O modelo troca retorno por drawdown: fica menos "
                                "exposto perto do topo do ciclo. Sem taxas nem "
                                "impostos. **Não é recomendação financeira.**")
@@ -510,7 +548,7 @@ with aba_ciclo:
                 "Leitura": c["rotulo"],
                 "O que mede": c["sobre"],
             } for c in snap_ciclo["componentes"]]),
-                use_container_width=True, hide_index=True)
+                **_largura(), hide_index=True)
             st.caption("⚠️ Limiares de fundo e topo mudam a cada ciclo. "
                        "**Não é recomendação financeira.**")
 
@@ -539,7 +577,7 @@ with aba_term:
             }))
         gauge.update_layout(template="plotly_dark", height=240,
                             margin=dict(l=20, r=20, t=40, b=0))
-        st.plotly_chart(gauge, use_container_width=True)
+        st.plotly_chart(gauge, **_largura())
     with g2:
         ok_scores = snapshot[snapshot["ok"]]["score"].dropna()
         st.metric("🟢 Compra", int((ok_scores > 0).sum()))
@@ -570,7 +608,7 @@ with aba_term:
     styler = (tab_show.style
               .map(_cor_sinal, subset=["Sinal"])
               .format({"Score": lambda v: "—" if pd.isna(v) else f"{int(v):+d}"}))
-    st.dataframe(styler, use_container_width=True, hide_index=True)
+    st.dataframe(styler, **_largura(), hide_index=True)
     st.caption("Score por indicador (−2 a +2); o consolidado é a média dos "
                "selecionados. **Não é recomendação financeira.**")
 
@@ -595,7 +633,7 @@ with aba_term:
                            legend=dict(orientation="h", y=1.12))
         figt.update_yaxes(title_text="Preço (USD)", secondary_y=False)
         figt.update_yaxes(title_text="Score", range=[-2.2, 2.2], secondary_y=True)
-        st.plotly_chart(figt, use_container_width=True)
+        st.plotly_chart(figt, **_largura())
 
     # Histórico próprio (log diário), se já houver dias suficientes.
     log = term.ler_log_diario()
@@ -612,7 +650,7 @@ with aba_term:
                                legend=dict(orientation="h", y=1.15))
             figl.update_yaxes(title_text="Preço", secondary_y=False)
             figl.update_yaxes(title_text="Score", range=[-2.2, 2.2], secondary_y=True)
-            st.plotly_chart(figl, use_container_width=True)
+            st.plotly_chart(figl, **_largura())
 
 # --------------------------------------------------------------------------
 # ABA 2 — PREÇO & HUMOR (Fear & Greed + Google Trends)
@@ -651,7 +689,7 @@ with aba_preco:
     fig.update_layout(template="plotly_dark", height=560,
                       margin=dict(l=10, r=10, t=40, b=10),
                       legend=dict(orientation="h", y=1.08))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **_largura())
 
 # --------------------------------------------------------------------------
 # ABA 3 — BACKTEST
@@ -698,7 +736,7 @@ with aba_bt:
                            title="Capital acumulado (1 = início)",
                            legend=dict(orientation="h", y=1.12),
                            yaxis_title="Múltiplo do capital")
-        st.plotly_chart(figb, use_container_width=True)
+        st.plotly_chart(figb, **_largura())
         st.caption("⚠️ Simplificado (sem taxas/impostos) — não prevê o futuro.")
 
 # --------------------------------------------------------------------------
@@ -728,7 +766,7 @@ with aba_ia:
             st.dataframe(
                 tabela.sort_values("date", ascending=False)[
                     ["date", "subreddit", "title", "sentimento", "nota"]],
-                use_container_width=True, hide_index=True,
+                **_largura(), hide_index=True,
                 column_config={
                     "date": "Data", "subreddit": "Fonte", "title": "Título",
                     "sentimento": "IA",

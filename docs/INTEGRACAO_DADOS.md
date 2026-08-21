@@ -106,18 +106,26 @@ ponderada) dos indicadores escolhidos.
 
 ### Faixas (valor ≤ limiar → score)
 
+Recalibradas contra a série real de 2010–2026 (as antigas liam o topo de
+out/2025 como NEUTRO — ver seção 5 sobre a queda de amplitude dos ciclos).
+
 ```
-mayer        (preço/MM200d):   ≤0.8:+2  ≤1.0:+1  ≤1.5:0  ≤2.4:-1  resto:-2
-ma200w       (preço/MM200sem): ≤1.0:+2  ≤1.5:+1  ≤3.0:0  ≤5.0:-1  resto:-2
-rsi_mensal   (RSI 14 mensal):  ≤30:+2   ≤45:+1   ≤60:0   ≤70:-1   resto:-2
+mayer        (preço/MM200d):   ≤0.75:+2 ≤0.95:+1 ≤1.2:0  ≤1.5:-1  resto:-2
+ma200w       (preço/MM200sem): ≤1.0:+2  ≤1.3:+1  ≤1.8:0  ≤2.2:-1  resto:-2
+rsi_mensal   (RSI 14 mensal):  ≤45:+2   ≤57:+1   ≤67:0   ≤76:-1   resto:-2
+             (a mediana do RSI mensal do BTC é ~63, não 50)
 fng          (Fear&Greed):     ≤20:+2   ≤40:+1   ≤60:0   ≤80:-1   resto:-2
-mvrv:                          ≤1.0:+2  ≤1.5:+1  ≤2.5:0  ≤3.5:-1  resto:-2
+mvrv:                          ≤0.9:+2  ≤1.3:+1  ≤1.8:0  ≤2.3:-1  resto:-2
 sopr:                          ≤0.95:+2 ≤1.0:+1  ≤1.02:0 ≤1.05:-1 resto:-2
-mvrv_z       (mvrv-zscore):    ≤0.0:+2  ≤2.0:+1  ≤4.0:0  ≤6.0:-1  resto:-2
-nupl:                          ≤0.0:+2  ≤0.25:+1 ≤0.5:0  ≤0.75:-1 resto:-2
-puell        (puell-multiple): ≤0.5:+2  ≤1.0:+1  ≤2.0:0  ≤4.0:-1  resto:-2
+mvrv_z       (mvrv-zscore):    ≤-0.2:+2 ≤0.8:+1  ≤2.0:0  ≤2.7:-1  resto:-2
+nupl:                          ≤0.05:+2 ≤0.25:+1 ≤0.45:0 ≤0.60:-1 resto:-2
+puell        (puell-multiple): ≤0.5:+2  ≤0.8:+1  ≤1.3:0  ≤1.9:-1  resto:-2
 reserve_risk (reserve-risk):   ≤0.002:+2 ≤0.005:+1 ≤0.01:0 ≤0.02:-1 resto:-2
+             (única sem fonte grátis; limiares clássicos, não conferidos)
 ```
+
+MVRV, MVRV Z-Score, NUPL e Puell saem de graça da Coin Metrics (seção 3b) —
+para o termômetro, só SOPR e Reserve Risk exigem a chave da BGeometrics.
 
 ### Score consolidado → rótulo
 

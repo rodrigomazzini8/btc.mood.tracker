@@ -127,6 +127,43 @@ BGEO_ENDPOINTS = {
 }
 
 
+# --------------------------------------------------------------------------
+# On-chain GRÁTIS (sem chave): Coin Metrics — ver `coinmetrics.py`.
+# Cobre MVRV, MVRV Z-Score, NUPL e Puell. SOPR e Reserve Risk continuam só
+# na BGeometrics (com chave).
+# --------------------------------------------------------------------------
+
+# métrica do termômetro -> coluna do dataset da Coin Metrics
+CM_EQUIVALENTES = {
+    "mvrv": "cm_mvrv", "mvrv_z": "cm_mvrv_z",
+    "nupl": "cm_nupl", "puell": "cm_puell",
+}
+
+
+def series_coinmetrics() -> dict[str, pd.DataFrame]:
+    """
+    Séries on-chain grátis (sem chave), no mesmo formato das da BGeometrics:
+    {metrica: DataFrame['date','valor']}. Vazio se a fonte não responder.
+    """
+    try:
+        import coinmetrics
+        dados = coinmetrics.fetch_coinmetrics()
+    except Exception as e:
+        print(f"[Coin Metrics] indisponível: {e}")
+        return {}
+    if dados is None or dados.empty:
+        return {}
+    out = {}
+    for metrica, coluna in CM_EQUIVALENTES.items():
+        if coluna not in dados.columns:
+            continue
+        df = (dados[["date", coluna]].rename(columns={coluna: "valor"})
+              .dropna().reset_index(drop=True))
+        if not df.empty:
+            out[metrica] = df
+    return out
+
+
 def _ler_chave() -> str:
     """
     Lê a chave da BGeometrics de forma robusta, em duas fontes:
@@ -297,20 +334,38 @@ def _score_por_faixas(valor: float, faixas: list[tuple[float, int]]) -> int:
     return faixas[-1][1]
 
 
-# Faixas de score por indicador (calibradas de forma didática/conservadora).
+# Faixas de score por indicador. RECALIBRADAS contra a série real do BTC
+# (2010-2026, Coin Metrics) — rode `python scripts/07_calibracao.py` para ver
+# o sinal do termômetro em cada topo e fundo de ciclo.
+#
+# Por que mudou: a amplitude de cada indicador ENCOLHE a cada ciclo, e as
+# faixas antigas eram de quando o BTC ia a MVRV 4+ e Mayer 3+. Valores nos
+# TOPOS de ciclo (2017 -> abr/21 -> nov/21 -> mar/24 -> out/25):
+#     MVRV      4.25 -> 3.38 -> 2.83 -> 2.68 -> 2.29
+#     MVRV Z    8.85 -> 5.26 -> 3.48 -> 2.93 -> 2.53
+#     NUPL      0.76 -> 0.70 -> 0.65 -> 0.63 -> 0.56
+#     Mayer     3.64 -> 1.93 -> 1.47 -> 1.80 -> 1.18
+#     preço/200sem 15.8 -> 5.63 -> 3.93 -> 2.23 -> 2.34
+# Com as faixas antigas, os topos de 2024 e 2025 saíam como "NEUTRO".
+#
 # Quanto menor o valor "barato", maior o score de COMPRA (+2).
 FAIXAS = {
     # --- Grátis (do preço) ---
-    "mayer":      [(0.8, 2), (1.0, 1), (1.5, 0), (2.4, -1), (float("inf"), -2)],
-    "ma200w":     [(1.0, 2), (1.5, 1), (3.0, 0), (5.0, -1), (float("inf"), -2)],
-    "rsi_mensal": [(30, 2), (45, 1), (60, 0), (70, -1), (float("inf"), -2)],
+    # Fundos de ciclo: Mayer 0.40-0.71 · preço/200sem 0.66-1.09 · RSI 34-52.
+    "mayer":      [(0.75, 2), (0.95, 1), (1.2, 0), (1.5, -1), (float("inf"), -2)],
+    "ma200w":     [(1.0, 2), (1.3, 1), (1.8, 0), (2.2, -1), (float("inf"), -2)],
+    # ATENÇÃO: a mediana do RSI mensal do BTC é ~63, não 50 — as faixas antigas
+    # (fundo só abaixo de 30) praticamente nunca marcavam compra.
+    "rsi_mensal": [(45, 2), (57, 1), (67, 0), (76, -1), (float("inf"), -2)],
     "fng":        [(20, 2), (40, 1), (60, 0), (80, -1), (float("inf"), -2)],
-    # --- On-chain (bgeometrics) ---
-    "mvrv":         [(1.0, 2), (1.5, 1), (2.5, 0), (3.5, -1), (float("inf"), -2)],
+    # --- On-chain (Coin Metrics de graça; BGeometrics com chave) ---
+    "mvrv":         [(0.9, 2), (1.3, 1), (1.8, 0), (2.3, -1), (float("inf"), -2)],
     "sopr":         [(0.95, 2), (1.0, 1), (1.02, 0), (1.05, -1), (float("inf"), -2)],
-    "mvrv_z":       [(0.0, 2), (2.0, 1), (4.0, 0), (6.0, -1), (float("inf"), -2)],
-    "nupl":         [(0.0, 2), (0.25, 1), (0.5, 0), (0.75, -1), (float("inf"), -2)],
-    "puell":        [(0.5, 2), (1.0, 1), (2.0, 0), (4.0, -1), (float("inf"), -2)],
+    "mvrv_z":       [(-0.2, 2), (0.8, 1), (2.0, 0), (2.7, -1), (float("inf"), -2)],
+    "nupl":         [(0.05, 2), (0.25, 1), (0.45, 0), (0.60, -1), (float("inf"), -2)],
+    "puell":        [(0.5, 2), (0.8, 1), (1.3, 0), (1.9, -1), (float("inf"), -2)],
+    # Reserve Risk não tem fonte grátis, então segue com os limiares clássicos
+    # (não conferidos contra a série real).
     "reserve_risk": [(0.002, 2), (0.005, 1), (0.01, 0), (0.02, -1), (float("inf"), -2)],
 }
 
@@ -327,24 +382,24 @@ ONCHAIN = {"mvrv", "sopr", "mvrv_z", "nupl", "puell", "reserve_risk"}
 
 # Explicação didática de cada indicador (para tooltips/expander no dashboard).
 EXPLICACOES = {
-    "mayer": "Preço ÷ média de 200 dias. <1 = barato; >2.4 historicamente "
-             "marca topos (esticado).",
-    "ma200w": "Preço ÷ média de 200 semanas. Perto de 1 costuma marcar fundos "
-              "de ciclo; muito acima indica euforia.",
-    "rsi_mensal": "Força relativa no timeframe mensal (0–100). <30 = sobrevendido "
-                  "(compra); >70 = sobrecomprado (venda).",
+    "mayer": "Preço ÷ média de 200 dias. <0.95 = barato; acima de 1.5 "
+             "marcou os topos dos ciclos recentes.",
+    "ma200w": "Preço ÷ média de 200 semanas. Perto de 1 marcou todos os "
+              "fundos de ciclo; acima de 2.2, os topos recentes.",
+    "rsi_mensal": "Força relativa no timeframe mensal (0–100). A mediana do BTC "
+                  "é ~63: abaixo de 45 é fundo; acima de 76, topo.",
     "fng": "Índice de Medo & Ganância (0–100). Medo extremo (baixo) tende a ser "
            "oportunidade; ganância extrema (alto), cautela.",
-    "mvrv": "Valor de mercado ÷ valor realizado. <1 = mercado abaixo do custo "
-            "médio (barato); >3.5 = topo histórico.",
+    "mvrv": "Valor de mercado ÷ valor realizado. <0.9 = mercado abaixo do "
+            "custo médio (barato); >2.3 marcou os topos recentes.",
     "sopr": "Spent Output Profit Ratio. <1 = moedas movidas no prejuízo "
             "(capitulação/compra); >1 = realização de lucro.",
-    "mvrv_z": "MVRV padronizado (z-score). Valores baixos marcam fundos; "
-              ">6–7 marcam topos de ciclo.",
-    "nupl": "Net Unrealized Profit/Loss. <0 = mercado no prejuízo (medo/compra); "
-            ">0.75 = euforia (venda).",
-    "puell": "Puell Multiple (receita de mineradores vs média). Baixo = pressão "
-             "em mineradores (fundo); alto = topo.",
+    "mvrv_z": "MVRV padronizado (z-score). Negativo marcou todos os fundos; "
+              "acima de 2.7, os topos dos dois últimos ciclos.",
+    "nupl": "Net Unrealized Profit/Loss. <0.05 = mercado no prejuízo "
+            "(medo/compra); >0.60 = euforia (venda).",
+    "puell": "Puell Multiple (receita de mineradores vs média). <0.5 = pressão "
+             "em mineradores (fundo); >1.9 = topo.",
     "reserve_risk": "Confiança vs preço. Valores baixos = ótima relação "
                     "risco/retorno (acumulação); altos = caro.",
 }
@@ -374,7 +429,8 @@ def score_indicador(chave: str, valor: float) -> int:
 
 def montar_snapshot(preco: pd.DataFrame, fng_atual: float | None,
                     incluir_onchain: bool = True,
-                    valores_onchain: dict | None = None) -> pd.DataFrame:
+                    valores_onchain: dict | None = None,
+                    usar_coinmetrics: bool = True) -> pd.DataFrame:
     """
     Monta a tabela do termômetro com o valor ATUAL de cada indicador, seu
     sinal e score. Indicadores indisponíveis (NaN) são marcados e não entram
@@ -407,6 +463,18 @@ def montar_snapshot(preco: pd.DataFrame, fng_atual: float | None,
     elif incluir_onchain and tem_chave_onchain():
         for m in BGEO_ENDPOINTS:  # mvrv, sopr, mvrv_z, nupl, puell, reserve_risk
             valores[m] = fetch_onchain_bgeometrics(m)
+
+    # --- On-chain GRÁTIS: completa o que ainda estiver faltando ---
+    # Assim MVRV, MVRV Z-Score, NUPL e Puell aparecem mesmo sem chave nenhuma.
+    if incluir_onchain and usar_coinmetrics:
+        faltando = [m for m in CM_EQUIVALENTES
+                    if m not in valores
+                    or valores.get(m) is None
+                    or (isinstance(valores.get(m), float) and np.isnan(valores[m]))]
+        if faltando:
+            for m, df in series_coinmetrics().items():
+                if m in faltando and not df["valor"].dropna().empty:
+                    valores[m] = float(df["valor"].dropna().iloc[-1])
 
     linhas = []
     for chave, valor in valores.items():
@@ -447,9 +515,10 @@ def consolidar(snapshot: pd.DataFrame, selecionados: list[str] | None = None,
 
 def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
                           selecionados: list[str] | None = None,
-                          incluir_onchain: bool = False,
+                          incluir_onchain: bool = True,
                           pesos: dict[str, float] | None = None,
-                          series_onchain: dict | None = None) -> pd.DataFrame:
+                          series_onchain: dict | None = None,
+                          usar_coinmetrics: bool = True) -> pd.DataFrame:
     """
     Recalcula o score consolidado AO LONGO DO TEMPO.
 
@@ -481,6 +550,12 @@ def serie_score_historico(preco: pd.DataFrame, fng: pd.DataFrame,
             s = serie_onchain_cache(m)
             if not s.empty:
                 series[m] = s.set_index("date")["valor"].astype(float)
+
+    # Completa com o on-chain grátis (Coin Metrics) o que não veio acima.
+    if incluir_onchain and usar_coinmetrics:
+        for m, df in series_coinmetrics().items():
+            if m not in series and not df.empty:
+                series[m] = df.set_index("date")["valor"].astype(float)
 
     # Mantém só os indicadores selecionados (ou todos os disponíveis).
     chaves = [k for k in series

@@ -1,0 +1,11 @@
+# ==========================================================================
+# Dependências só para DESENVOLVER (testes e lint). Não são necessárias
+# para rodar o dashboard nem os scripts.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest -q
+#   flake8
+# ==========================================================================
+
+pytest>=7.0
+flake8>=6.0

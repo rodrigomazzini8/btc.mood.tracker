@@ -44,9 +44,16 @@ selecionados (com checkboxes para escolher quais entram).
 
 - **Indicadores grátis, sem chave** (calculados do preço): Mayer Multiple,
   200W MA Ratio, RSI mensal, e o Fear & Greed.
-- **Indicadores on-chain (opcionais)**: MVRV, SOPR, MVRV Z-Score, NUPL,
-  Puell Multiple, Reserve Risk — via **BGeometrics** (`api.bgeometrics.com`).
-  Só aparecem se você definir a chave.
+- **On-chain grátis, sem chave**: MVRV, MVRV Z-Score, NUPL e Puell Multiple
+  via **Coin Metrics** — aparecem sozinhos, sem configurar nada.
+- **On-chain com chave (opcional)**: SOPR e Reserve Risk via **BGeometrics**
+  (`api.bgeometrics.com`).
+
+> As faixas de cada indicador foram **recalibradas contra a série real de
+> 2010–2026**: as antigas eram de quando o BTC ia a MVRV 4+ e Mayer 3+, e por
+> isso liam o topo de out/2025 como *NEUTRO*. Com as novas, o termômetro
+> acerta o sinal em 11 de 11 viradas de ciclo (antes, 10). Confira com
+> `python scripts/07_calibracao.py`.
 
 Recursos do termômetro: medidor (gauge) do score, tabela colorida por sinal,
 contadores Compra/Neutro/Venda, expander explicando cada indicador, escolha
@@ -229,6 +236,10 @@ também SOPR, RHODL e Supply in Profit — e as métricas em comum
 btc-mood-tracker/
 ├── dashboard.py            # app Streamlit unindo tudo (Plotly, filtros, cache)
 ├── requirements.txt
+├── requirements-dev.txt    # pytest + flake8 (só para desenvolver)
+├── setup.cfg               # configuração do lint e dos testes
+├── .github/workflows/ci.yml # lint + testes em 3 versões de Python
+├── tests/                  # suíte offline (não acessa a rede)
 ├── README.md
 ├── .gitignore              # ignora cache/, *.csv, *.png, __pycache__, modelos HF
 └── scripts/
@@ -239,7 +250,8 @@ btc-mood-tracker/
     ├── 04_cache_defasagem.py   # cache CSV, média móvel, correlação defasada
     ├── 05_finbert.py           # FinBERT lendo texto real do Reddit, x preço
     ├── 06_cycle_model.py       # BTC Cycle Model no terminal + card HTML
-    ├── 07_calibracao.py        # confere o modelo nos topos/fundos reais
+    ├── 07_calibracao.py        # confere os modelos nos topos/fundos reais
+    ├── coinmetrics.py          # on-chain grátis sem chave (Coin Metrics)
     ├── termometro.py           # score consolidado -2..+2 (indicadores soltos)
     └── cycle_model.py          # modelo de CICLO 0-100 + card visual + backtest
 ```
@@ -301,6 +313,37 @@ renderiza mesmo que o Google Trends ou o FinBERT estejam indisponíveis.
 
 ---
 
+## 🧪 Testes e CI
+
+O projeto tem uma suíte de testes **offline** (nenhum teste acessa a rede,
+então roda rápido e não gasta cota de API nenhuma):
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest          # 75 testes
+flake8          # lint
+python scripts/cycle_model.py --autoteste
+```
+
+O que a suíte protege:
+
+- **integridade das escalas** dos dois modelos (ordem, monotonicidade, faixa
+  0–100 / −2..+2) — o erro mais fácil de cometer ao recalibrar;
+- **regressões de calibração**: há testes que falham se alguém voltar a exigir
+  "MVRV-Z acima de 6" para marcar topo;
+- **ausência de look-ahead**: cortar a série no meio não pode mudar o score
+  dos dias anteriores ao corte;
+- **degradação graciosa**: falha de rede em qualquer fonte devolve DataFrame
+  vazio, nunca derruba o app;
+- **matemática das métricas derivadas** (MVRV Z-Score, NUPL, Puell) contra
+  fixtures conferidas na mão;
+- **escapamento de HTML** no card (ele monta HTML na mão).
+
+O CI (GitHub Actions, `.github/workflows/ci.yml`) roda lint + testes +
+autoteste em **Python 3.9, 3.11 e 3.12** a cada push e pull request.
+
+---
+
 ## ☁️ Deploy grátis (Streamlit Community Cloud)
 
 O dashboard pode ir ao ar de graça, sem servidor próprio:
@@ -343,6 +386,8 @@ Observações:
 - [x] Header de destaque com preço, variação 24h e sinal do termômetro.
 - [x] Histórico próprio: log diário do score (1 linha/dia) com gráfico.
 - [x] Alertas visuais de zona (COMPRA FORTE / VENDA FORTE).
+- [x] Faixas do Termômetro recalibradas e on-chain grátis (sem chave) nele também.
+- [x] Suíte de testes offline + CI no GitHub Actions.
 - [ ] Mais fontes de humor (funding rate, dominância).
 - [x] Modelo de ciclo 0–100 (Cycle Model) com card visual e plano de posição.
 - [x] On-chain real **sem chave** (Coin Metrics) e escalas calibradas contra
