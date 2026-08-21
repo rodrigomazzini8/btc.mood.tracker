@@ -226,3 +226,96 @@ def test_card_escapa_texto_perigoso(preco_sintetico):
     html = cm.card_html(res)
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ------------------------------------------------------- rebalanceamento
+
+def test_rebalanceamento_manda_comprar_quando_esta_abaixo_do_alvo():
+    reb = cm.plano_rebalanceamento(20, patrimonio=10_000, valor_em_btc=2_000)
+    assert reb["acao"] == "COMPRAR"
+    assert reb["ajuste"] > 0
+    # comprar o ajuste leva exatamente ao alvo
+    novo = (2_000 + reb["ajuste"]) / 10_000 * 100
+    assert novo == pytest.approx(reb["alvo_pct"])
+
+
+def test_rebalanceamento_manda_vender_quando_esta_acima():
+    reb = cm.plano_rebalanceamento(90, patrimonio=10_000, valor_em_btc=9_000)
+    assert reb["acao"] == "VENDER"
+    assert reb["ajuste"] < 0
+
+
+def test_banda_de_tolerancia_evita_giro():
+    """Dentro da banda o modelo manda não mexer — e o ajuste tem de ser zero."""
+    alvo = cm.alvo_exposicao(50)
+    patrimonio = 10_000.0
+    quase_no_alvo = (alvo - 3) / 100 * patrimonio      # 3 p.p. abaixo do alvo
+    reb = cm.plano_rebalanceamento(50, patrimonio, quase_no_alvo, banda=5.0)
+    assert reb["acao"] == "MANTER"
+    assert reb["ajuste"] == 0.0
+    assert reb["dentro_da_banda"]
+
+    # com banda menor que o desvio, volta a mandar ajustar
+    reb2 = cm.plano_rebalanceamento(50, patrimonio, quase_no_alvo, banda=1.0)
+    assert reb2["acao"] == "COMPRAR"
+
+
+def test_rebalanceamento_converte_para_btc_quando_tem_preco():
+    reb = cm.plano_rebalanceamento(20, 10_000, 2_000, preco_btc=50_000)
+    assert reb["ajuste_btc"] == pytest.approx(reb["ajuste"] / 50_000)
+    sem_preco = cm.plano_rebalanceamento(20, 10_000, 2_000)
+    assert sem_preco["ajuste_btc"] is None
+
+
+def test_aporte_segue_o_dca_da_fase():
+    reb = cm.plano_rebalanceamento(10, 10_000, 5_000, aporte_base=1_000)
+    assert reb["aporte_sugerido"] == pytest.approx(1_000 * cm.multiplicador_dca(10))
+
+
+@pytest.mark.parametrize("patrimonio,em_btc", [(0, 100), (-5, 1), (1000, -1)])
+def test_rebalanceamento_com_entrada_invalida(patrimonio, em_btc):
+    assert cm.plano_rebalanceamento(50, patrimonio, em_btc)["acao"] == "—"
+
+
+def test_rebalanceamento_com_score_invalido():
+    assert cm.plano_rebalanceamento(float("nan"), 1000, 500)["acao"] == "—"
+
+
+# ------------------------------------------------- histerese de fase
+
+def test_fase_so_troca_com_margem():
+    # 35 é a fronteira ACUMULAÇÃO -> EXPANSÃO; com margem 1.5 só vale a partir de 36.5
+    assert cm.fase_confirmada(35.4, "ACUMULAÇÃO") == "ACUMULAÇÃO"
+    assert cm.fase_confirmada(36.6, "ACUMULAÇÃO") == "EXPANSÃO"
+    # descendo, idem: precisa entrar 1.5 abaixo de 35
+    assert cm.fase_confirmada(34.0, "EXPANSÃO") == "EXPANSÃO"
+    assert cm.fase_confirmada(33.0, "EXPANSÃO") == "ACUMULAÇÃO"
+
+
+def test_fase_sem_estado_anterior():
+    assert cm.fase_confirmada(50, None) == "EXPANSÃO"
+    assert cm.fase_confirmada(50, "—") == "EXPANSÃO"
+
+
+def test_fase_confirmada_com_score_invalido():
+    assert cm.fase_confirmada(float("nan"), "EXPANSÃO") == "EXPANSÃO"
+
+
+def test_histerese_nao_trava_mudanca_grande():
+    """Pulo de duas fases não pode ficar preso pela margem."""
+    assert cm.fase_confirmada(95, "EXPANSÃO") == "EUFORIA"
+    assert cm.fase_confirmada(5, "DISTRIBUIÇÃO") == "FUNDO PROFUNDO"
+
+
+def test_histerese_evita_alerta_diario():
+    """
+    Simula um score oscilando em cima do limiar: a fase só pode trocar uma
+    vez, não a cada dia.
+    """
+    fase = "ACUMULAÇÃO"
+    trocas = 0
+    for score in [34.8, 35.2, 34.9, 35.5, 34.7, 35.1, 36.9, 35.2, 34.9]:
+        nova = cm.fase_confirmada(score, fase)
+        trocas += nova != fase
+        fase = nova
+    assert trocas == 1

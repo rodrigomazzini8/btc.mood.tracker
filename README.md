@@ -199,12 +199,49 @@ mostra o **score semanal** — o modelo é de ciclo, então a decisão deve ser
 tomada no fechamento da semana, não no ruído do dia. O **backtest** compara
 seguir essa curva contra comprar e segurar (retorno, CAGR, drawdown, Sharpe).
 
+### Do score para a MINHA posição
+
+Saber que o ciclo está em ACUMULAÇÃO não diz quanto comprar **hoje, com o que
+você já tem**. A aba tem uma calculadora de rebalanceamento: você informa o
+patrimônio considerado, quanto disso já está em BTC e o aporte recorrente
+normal, e ela devolve o ajuste concreto até a exposição-alvo.
+
+Duas decisões de projeto que evitam o erro clássico de rebalancear demais:
+
+- **Banda de tolerância** (5 p.p. por padrão): dentro dela a resposta é
+  *não mexer*. Giro custa taxa e imposto e quase não muda o risco.
+- **Ajuste em parcelas**: o texto sempre manda parcelar, nunca virar a
+  posição de uma vez.
+
+Nada é salvo nem enviado — as contas acontecem na sua sessão.
+
+### Alerta de mudança de fase
+
+O modelo é de ciclo: olhar o score todo dia vira ansiedade. O que muda
+decisão é a **virada de fase**.
+
+```bash
+python scripts/08_alerta.py            # fica calado se nada mudou
+python scripts/08_alerta.py --forcar   # imprime a situação de qualquer jeito
+```
+
+Ele usa o score do **fechamento semanal**, exige uma **margem** para confirmar
+a fase nova (senão um score oscilando em torno de 35 dispararia um alerta por
+dia) e guarda a última fase em `cache/alerta_fase.json`. Serve para um cron
+diário. Para receber em algum lugar:
+
+```bash
+export ALERTA_WEBHOOK="https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>"
+python scripts/08_alerta.py
+```
+
 ### Como usar
 
 ```bash
 streamlit run dashboard.py         # aba "🔮 Cycle Model"
 python scripts/06_cycle_model.py   # terminal + exporta cycle_model.html
 python scripts/07_calibracao.py    # confere o modelo nas viradas históricas
+python scripts/08_alerta.py        # avisa só quando o ciclo muda de fase
 python scripts/cycle_model.py --autoteste   # testa o modelo offline
 ```
 
@@ -251,6 +288,7 @@ btc-mood-tracker/
     ├── 05_finbert.py           # FinBERT lendo texto real do Reddit, x preço
     ├── 06_cycle_model.py       # BTC Cycle Model no terminal + card HTML
     ├── 07_calibracao.py        # confere os modelos nos topos/fundos reais
+    ├── 08_alerta.py            # alerta (com histerese) de mudança de fase
     ├── coinmetrics.py          # on-chain grátis sem chave (Coin Metrics)
     ├── termometro.py           # score consolidado -2..+2 (indicadores soltos)
     └── cycle_model.py          # modelo de CICLO 0-100 + card visual + backtest
@@ -297,6 +335,7 @@ python scripts/01_simples_vader.py    # Reddit + VADER
 python scripts/05_finbert.py          # Reddit + FinBERT (baixa o modelo na 1ª vez)
 python scripts/06_cycle_model.py      # 🔮 score de ciclo 0-100 + cycle_model.html
 python scripts/07_calibracao.py       # 🎯 calibração do modelo x história real
+python scripts/08_alerta.py           # 🔔 avisa quando o ciclo muda de fase
 ```
 
 ### Dashboard interativo
@@ -388,6 +427,7 @@ Observações:
 - [x] Alertas visuais de zona (COMPRA FORTE / VENDA FORTE).
 - [x] Faixas do Termômetro recalibradas e on-chain grátis (sem chave) nele também.
 - [x] Suíte de testes offline + CI no GitHub Actions.
+- [x] Rebalanceamento (com banda de tolerância) e alerta de mudança de fase.
 - [ ] Mais fontes de humor (funding rate, dominância).
 - [x] Modelo de ciclo 0–100 (Cycle Model) com card visual e plano de posição.
 - [x] On-chain real **sem chave** (Coin Metrics) e escalas calibradas contra

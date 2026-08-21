@@ -231,6 +231,38 @@ multiplicador DCA:  0→3.0  15→2.5  30→1.8  45→1.2  60→0.8  70→0.5  8
 Para bot: mande **o score do fechamento semanal** (o modelo é de ciclo) e
 avise quando a **fase mudar** — não a cada oscilação diária.
 
+### Alerta de mudança de fase (com histerese)
+
+Trocar de fase no limiar seco gera alerta todo dia quando o score oscila em
+cima dele (34,9 / 35,1). Exija uma margem:
+
+```
+fase_nova = fase(score)
+se fase_nova != fase_guardada:
+    se subiu:   confirma só se score >= limiar_de_entrada + margem   (margem ~1.5)
+    se desceu:  confirma só se score <= limiar_de_saída  − margem
+    senão: mantém a fase guardada (não alerta)
+guarde a fase confirmada e só avise quando ela mudar
+```
+
+Implementado em `cycle_model.fase_confirmada()` e usado pelo
+`scripts/08_alerta.py`, que aceita `ALERTA_WEBHOOK` (a URL do `sendMessage`
+do bot do Telegram funciona direto).
+
+### Do score para a posição do usuário
+
+```
+alvo   = exposição-alvo(score)                  # curva da seção acima
+atual  = valor_em_btc / patrimônio * 100
+desvio = atual − alvo
+se |desvio| <= banda (ex.: 5 p.p.): NÃO MEXER   # giro custa taxa e imposto
+senão: ajuste_em_dinheiro = (alvo − atual)/100 * patrimônio
+       (positivo = comprar, negativo = realizar — sempre em parcelas)
+aporte_do_mês = aporte_base * multiplicador_DCA(score)
+```
+
+Implementado em `cycle_model.plano_rebalanceamento()`.
+
 ---
 
 ## 6) Pseudocódigo para o bot (mensagem diária)

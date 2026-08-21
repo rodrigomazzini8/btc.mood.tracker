@@ -864,6 +864,80 @@ def plano_posicao(score: float) -> dict:
             "acao": acao, "detalhe": detalhe}
 
 
+def plano_rebalanceamento(score: float, patrimonio: float, valor_em_btc: float,
+                          banda: float = 5.0, preco_btc: float | None = None,
+                          aporte_base: float = 0.0) -> dict:
+    """
+    Fecha o ciclo entre "o modelo diz X" e "o que eu faço com a MINHA posição".
+
+    Dado o score, quanto você tem no total e quanto disso já está em BTC,
+    devolve o ajuste concreto até a exposição-alvo da curva.
+
+    - `patrimonio`: total considerado na alocação (BTC + caixa/renda fixa);
+    - `valor_em_btc`: quanto desse total está em BTC hoje;
+    - `banda`: tolerância em pontos percentuais. **Dentro da banda não se
+      mexe** — sem isso o ruído diário viraria giro (e taxa/imposto) sem
+      mudar nada de relevante. 5 p.p. é um valor conservador comum;
+    - `preco_btc`: opcional, para traduzir o ajuste em quantidade de BTC;
+    - `aporte_base`: opcional, seu aporte recorrente "normal" — devolvemos
+      quanto ele viraria com o DCA adaptativo desta fase.
+
+    Retorna dict com alvo/atual/desvio, ação (COMPRAR/VENDER/MANTER), o valor
+    do ajuste e uma frase pronta. Nada disso é recomendação financeira: é
+    aritmética em cima da curva do modelo.
+    """
+    vazio = {"acao": "—", "detalhe": "Dados insuficientes.",
+             "alvo_pct": float("nan"), "atual_pct": float("nan"),
+             "desvio_pp": float("nan"), "ajuste": 0.0, "ajuste_btc": None,
+             "aporte_sugerido": float("nan"), "dentro_da_banda": False}
+    if score is None or not np.isfinite(score):
+        return vazio
+    try:
+        patrimonio = float(patrimonio)
+        valor_em_btc = float(valor_em_btc)
+    except (TypeError, ValueError):
+        return vazio
+    if patrimonio <= 0 or valor_em_btc < 0:
+        return vazio
+
+    alvo = alvo_exposicao(score)
+    atual = valor_em_btc / patrimonio * 100.0
+    desvio = atual - alvo                      # positivo = BTC demais
+    dentro = abs(desvio) <= float(banda)
+    # Ajuste em dinheiro para chegar exatamente no alvo (+ = comprar).
+    ajuste = (alvo - atual) / 100.0 * patrimonio
+    aporte = float(aporte_base) * multiplicador_dca(score) if aporte_base else float("nan")
+
+    if dentro:
+        acao = "MANTER"
+        detalhe = (f"Você está em {atual:.0f}% e o alvo da fase é {alvo:.0f}% "
+                   f"— dentro da banda de {banda:.0f} p.p. Não mexer: o giro "
+                   f"custa taxa e imposto e não muda o risco de forma "
+                   f"relevante.")
+        ajuste = 0.0
+    elif ajuste > 0:
+        acao = "COMPRAR"
+        detalhe = (f"Você está em {atual:.0f}% e o alvo é {alvo:.0f}%. "
+                   f"Faltam {ajuste:,.0f} para chegar lá — comprar em "
+                   f"parcelas, não de uma vez.")
+    else:
+        acao = "VENDER"
+        detalhe = (f"Você está em {atual:.0f}% e o alvo é {alvo:.0f}%. "
+                   f"Sobram {abs(ajuste):,.0f} em BTC — realizar em parcelas, "
+                   f"a cada nova alta do score.")
+
+    return {
+        "acao": acao, "detalhe": detalhe,
+        "alvo_pct": alvo, "atual_pct": atual, "desvio_pp": desvio,
+        "ajuste": ajuste,
+        "ajuste_btc": (ajuste / float(preco_btc)
+                       if preco_btc and float(preco_btc) > 0 else None),
+        "aporte_sugerido": aporte,
+        "dentro_da_banda": dentro,
+        "fase": fase_do_score(score),
+    }
+
+
 def serie_semanal(hist: pd.DataFrame) -> pd.DataFrame:
     """
     Score em fechamento SEMANAL (segunda a domingo).
@@ -883,6 +957,41 @@ def serie_semanal(hist: pd.DataFrame) -> pd.DataFrame:
     ultima = df.index.max()
     sem["date"] = sem["date"].where(sem["date"] <= ultima, ultima)
     return sem
+
+
+# --------------------------------------------------------------------------
+# Mudança de fase com histerese (para alertas que não ficam piscando)
+# --------------------------------------------------------------------------
+
+def fase_confirmada(score: float, fase_anterior: str | None,
+                    margem: float = 1.5) -> str:
+    """
+    Fase a considerar AGORA, exigindo uma margem para trocar de fase.
+
+    Sem isso, um score oscilando em torno de um limiar (34,9 / 35,1) trocaria
+    de fase todo dia e geraria um alerta por dia. Com `margem`, a fase nova só
+    vale depois que o score entra de fato no território dela.
+
+    Devolve a fase nova (se confirmada) ou a anterior (se ainda em cima do
+    muro). Sem fase anterior, devolve simplesmente a fase do score.
+    """
+    if score is None or not np.isfinite(score):
+        return fase_anterior or "—"
+    atual = fase_do_score(score)
+    if not fase_anterior or fase_anterior == atual or fase_anterior == "—":
+        return atual
+
+    limites = [f[0] for f in FASES]
+    nomes = [f[1] for f in FASES]
+    if fase_anterior not in nomes:
+        return atual
+
+    i_antes, i_agora = nomes.index(fase_anterior), nomes.index(atual)
+    if i_agora > i_antes:            # subiu de fase: limiar de entrada é o de baixo
+        fronteira = limites[i_agora - 1]
+        return atual if score >= fronteira + margem else fase_anterior
+    fronteira = limites[i_agora]     # desceu: limiar é o topo da fase nova
+    return atual if score <= fronteira - margem else fase_anterior
 
 
 # ==========================================================================

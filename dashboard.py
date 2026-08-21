@@ -458,6 +458,56 @@ with aba_ciclo:
                        "market cap ÷ realized cap — são pilares correlacionados "
                        "por construção.")
 
+        # --- Do score para a MINHA posição: quanto comprar/vender agora.
+        with st.expander("💰 Rebalanceamento — o que fazer com a minha posição"):
+            st.caption("Só aritmética em cima da curva de exposição do modelo. "
+                       "Nada sai daqui: os valores não são salvos nem enviados.")
+            r1, r2, r3 = st.columns(3)
+            patrimonio = r1.number_input(
+                "Patrimônio total considerado", min_value=0.0, value=10000.0,
+                step=500.0, help="BTC + caixa/renda fixa que entram nesta alocação.")
+            em_btc = r2.number_input(
+                "Quanto disso já está em BTC", min_value=0.0, value=5000.0,
+                step=500.0)
+            aporte_base = r3.number_input(
+                "Aporte recorrente normal", min_value=0.0, value=500.0, step=100.0,
+                help="Quanto você aportaria num mês comum. O DCA adaptativo "
+                     "multiplica esse valor.")
+            banda = st.slider(
+                "Banda de tolerância (p.p.)", 0.0, 15.0, 5.0, 0.5,
+                help="Dentro da banda o modelo manda NÃO mexer — giro custa "
+                     "taxa e imposto e quase não muda o risco.")
+
+            reb = cm.plano_rebalanceamento(
+                snap_ciclo["score"], patrimonio=patrimonio, valor_em_btc=em_btc,
+                banda=banda, preco_btc=snap_ciclo.get("preco"),
+                aporte_base=aporte_base)
+
+            if reb["acao"] == "—":
+                st.info("Preencha o patrimônio total para calcular.")
+            else:
+                cor_acao = {"COMPRAR": VERDE, "VENDER": VERMELHO,
+                            "MANTER": "#8a8f98"}[reb["acao"]]
+                q1, q2, q3, q4 = st.columns(4)
+                q1.metric("Exposição atual", f"{reb['atual_pct']:.0f}%",
+                          f"{reb['desvio_pp']:+.0f} p.p. vs alvo",
+                          delta_color="off")
+                q2.metric("Alvo da fase", f"{reb['alvo_pct']:.0f}%")
+                q3.metric("Ajuste", f"{reb['ajuste']:+,.0f}",
+                          None if reb["ajuste_btc"] is None
+                          else f"{reb['ajuste_btc']:+.4f} BTC", delta_color="off")
+                q4.metric("Aporte deste mês", f"{reb['aporte_sugerido']:,.0f}",
+                          f"{cm.multiplicador_dca(snap_ciclo['score']):.2f}× o normal",
+                          delta_color="off")
+                st.markdown(
+                    f"<div style='background:{cor_acao}22;border-left:3px solid "
+                    f"{cor_acao};border-radius:8px;padding:10px 14px'>"
+                    f"<b style='color:{cor_acao}'>{reb['acao']}</b><br>"
+                    f"<span style='font-size:13px'>{reb['detalhe']}</span></div>",
+                    unsafe_allow_html=True)
+                st.caption("⚠️ Não é recomendação financeira. Rebalanceamento "
+                           "gera evento tributável — considere as regras do seu país.")
+
         # --- Histórico: preço (log) em cima, score com as faixas de fase embaixo.
         if not hist_ciclo.empty:
             h = hist_ciclo[hist_ciclo["date"] >=
