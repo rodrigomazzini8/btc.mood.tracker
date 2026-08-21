@@ -68,6 +68,24 @@ def chats_permitidos() -> set[str]:
     return {c.strip() for c in bruto.split(",") if c.strip()}
 
 
+def esconder_token(texto: str, token: str) -> str:
+    """
+    Tira o token de qualquer texto antes de ele virar log.
+
+    Não é paranoia: o token vai na URL da API, e as exceções do `requests`
+    trazem a URL inteira na mensagem. Sem isso, uma queda de rede imprimiria
+    o token no terminal — e no log do CI.
+    """
+    texto = str(texto)
+    if token and len(token) > 8:
+        texto = texto.replace(token, "<TOKEN>")
+        # O @BotFather usa o formato <id>:<segredo>; esconde o segredo mesmo
+        # que o token que apareça no texto não seja exatamente o configurado.
+        if ":" in token:
+            texto = texto.replace(token.split(":", 1)[1], "<TOKEN>")
+    return re.sub(r"/bot\d+:[A-Za-z0-9_\-]+", "/bot<TOKEN>", texto)
+
+
 def _chamar(metodo: str, dados: dict, token: str | None = None,
             timeout: int = HTTP_TIMEOUT) -> dict:
     """
@@ -87,7 +105,7 @@ def _chamar(metodo: str, dados: dict, token: str | None = None,
             return {"ok": False, "erro": corpo.get("description", "erro")}
         return corpo
     except Exception as e:
-        return {"ok": False, "erro": str(e)}
+        return {"ok": False, "erro": esconder_token(e, tok)}
 
 
 def enviar(chat_id, texto: str, token: str | None = None) -> bool:

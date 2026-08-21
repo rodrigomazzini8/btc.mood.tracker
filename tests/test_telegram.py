@@ -265,3 +265,39 @@ def test_estado_da_fase_ida_e_volta(tmp_path):
     assert lido["fase"] == "ACUMULAÇÃO" and lido["score"] == 28.2
     assert lido["preco"] == 73070.93
     assert json.loads(open(arq, encoding="utf-8").read())["em"]
+
+
+# ------------------------------------------------- token não pode vazar
+
+def test_erro_de_rede_nao_expoe_o_token(monkeypatch, capsys):
+    """
+    O token vai na URL da API, e as exceções do requests trazem a URL
+    inteira. Sem tratamento, uma queda de rede imprime o token no terminal
+    (e no log do CI).
+    """
+    token = "123456789:AAHsegredoQUEnaoPODEaparecer"
+
+    def _explode(url, **kwargs):
+        raise OSError(f"Max retries exceeded with url: /bot{token}/sendMessage")
+
+    monkeypatch.setattr("requests.post", _explode)
+    assert tg.enviar("1", "oi", token=token) is False
+
+    saida = capsys.readouterr().out
+    assert token not in saida
+    assert "segredoQUEnaoPODEaparecer" not in saida
+    assert "<TOKEN>" in saida
+
+
+@pytest.mark.parametrize("texto", [
+    "url: /bot999:SEGREDO/sendMessage",
+    "falhou em https://api.telegram.org/bot999:SEGREDO/getUpdates",
+])
+def test_esconder_token_pega_qualquer_token_no_texto(texto):
+    """Vale até para um token que não é o configurado (log de outro bot)."""
+    limpo = tg.esconder_token(texto, "outro:token")
+    assert "SEGREDO" not in limpo and "<TOKEN>" in limpo
+
+
+def test_esconder_token_sem_token_configurado():
+    assert tg.esconder_token("erro qualquer", "") == "erro qualquer"
