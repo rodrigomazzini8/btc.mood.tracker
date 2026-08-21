@@ -1,6 +1,13 @@
 # --- Cache de dados gerado pelos scripts ---
 cache/
 *.csv
+# ...MENOS o snapshot on-chain, que é versionado de propósito: é ele que faz
+# o app ter dado fresco onde a API está bloqueada. Atualizado 1x/dia pelo
+# workflow .github/workflows/dados.yml.
+!data/onchain_btc.csv
+# O estado do alerta hoje não casa com nenhuma regra acima, mas fica
+# explícito: o CI precisa dele versionado para lembrar a fase entre execuções.
+!data/alerta_estado.json
 
 # --- Imagens geradas (gráficos) ---
 *.png

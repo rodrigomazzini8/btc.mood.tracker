@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import time
-import datetime as dt
 
 import requests
 import pandas as pd
@@ -402,7 +401,6 @@ def fetch_textos_para_ia(subreddits=("Bitcoin",), limit: int = 100) -> pd.DataFr
 
     print("[Texto IA] Reddit indisponível — usando notícias (CryptoCompare).")
     return fetch_crypto_news(limit=limit)
-
 
 
 # --------------------------------------------------------------------------

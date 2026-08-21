@@ -1,0 +1,60 @@
+name: Dados on-chain
+
+# Mantém `data/onchain_btc.csv` em dia. O runner do GitHub tem rede aberta,
+# então ele busca o dado e versiona um arquivo pequeno — o app lê dali e
+# funciona mesmo onde a API está bloqueada.
+on:
+  schedule:
+    # 06:20 UTC todo dia (a Coin Metrics fecha o dia anterior de madrugada).
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+  # Também roda quando o próprio pipeline de dados muda: serve de teste real
+  # da busca (o runner tem rede aberta) e já deixa o snapshot em dia.
+  push:
+    paths:
+      - ".github/workflows/dados.yml"
+      - "scripts/09_atualiza_dados.py"
+      - "scripts/coinmetrics.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dados-onchain
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install requests pandas
+
+      - name: Buscar on-chain e gravar o snapshot
+        run: python scripts/09_atualiza_dados.py --max-atraso 2
+
+      - name: Commitar se mudou
+        run: |
+          # `git add` antes de comparar: assim a checagem enxerga arquivo novo
+          # (a versão anterior usava `git status` e não via o snapshot recém
+          # criado, nem denunciava que ele estava no .gitignore).
+          git add data/onchain_btc.csv
+          if git diff --cached --quiet; then
+            echo "Nada mudou em data/ — sem commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ate=$(python -c "import pandas as pd; print(pd.read_csv('data/onchain_btc.csv')['date'].max())")
+          # [skip ci]: commit de dados não muda código. Sem isso o GitHub
+          # abre uma execução da suíte que, por ter sido disparada pelo bot,
+          # fica parada esperando aprovação manual ("action_required").
+          git commit -m "dados: on-chain até ${ate} [skip ci]"
+          git push

@@ -38,6 +38,43 @@ import cycle_model as cm  # noqa: E402  (score de CICLO 0-100, com card visual)
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="BTC Mood Tracker", page_icon="📈", layout="wide")
 
+# --------------------------------------------------------------------------
+# Compatibilidade de largura entre versões do Streamlit
+# --------------------------------------------------------------------------
+# O `use_container_width=True` foi depreciado (removido depois de 2025-12-31)
+# em favor de `width="stretch"`, que só existe nas versões novas. Como o
+# requirements aceita streamlit>=1.28, escolhemos o argumento certo em tempo
+# de execução em vez de fixar um dos dois.
+
+
+def _versao_streamlit() -> tuple:
+    try:
+        partes = str(st.__version__).split(".")
+        return int(partes[0]), int(partes[1])
+    except Exception:
+        return (0, 0)
+
+
+_LARGURA_NOVA = _versao_streamlit() >= (1, 50)
+
+
+def _largura() -> dict:
+    """kwargs para o componente ocupar a largura toda do container."""
+    return {"width": "stretch"} if _LARGURA_NOVA else {"use_container_width": True}
+
+
+def _html_em_iframe(html: str, altura: int) -> None:
+    """
+    Renderiza HTML próprio dentro de um iframe (para o CSS do card não brigar
+    com o tema do Streamlit). `st.components.v1.html` foi depreciado em favor
+    de `st.iframe`; usamos o que existir na versão instalada.
+    """
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=altura)
+    else:
+        components.html(html, height=altura, scrolling=True)
+
+
 # Paleta do tema escuro.
 LARANJA = "#f7931a"
 VERDE = "#26a69a"
@@ -134,8 +171,18 @@ def carregar_cycle_onchain() -> dict:
             for m, df in series.items() if not df.empty}
 
 
+@st.cache_data(ttl=43200, show_spinner="Baixando on-chain grátis (Coin Metrics)...")
+def carregar_coinmetrics() -> pd.DataFrame:
+    """
+    On-chain REAL sem chave nenhuma: CSV público da Coin Metrics (MVRV,
+    MVRV Z-Score, NUPL e Puell reais). ~2,5 MB, cacheado 12h em disco pelo
+    próprio cycle_model. Se falhar, devolve vazio e o modelo usa os proxies.
+    """
+    return cm.fetch_coinmetrics()
+
+
 @st.cache_data(ttl=3600, show_spinner="Rodando o BTC Cycle Model...")
-def carregar_cycle(onchain_itens: tuple):
+def carregar_cycle(onchain_itens: tuple, cm_assinatura: tuple):
     """
     Snapshot + histórico do modelo de ciclo. Usa histórico longo de preço
     (a MA200W, base dos proxies grátis, precisa de ~4 anos).
@@ -144,12 +191,16 @@ def carregar_cycle(onchain_itens: tuple):
     preco_longo = common.fetch_btc_price(dias=2200)
     fng_full = common.fetch_fear_greed(limit=0)
     series = _onchain_series_df(dict(onchain_itens))
+    dados_cm = carregar_coinmetrics()
     if preco_longo.empty:
-        return {}, pd.DataFrame()
+        # Sem preço das corretoras: a própria série da Coin Metrics tem preço.
+        if dados_cm is None or dados_cm.empty:
+            return {}, pd.DataFrame()
+        preco_longo = dados_cm[["date", "price"]].tail(2200).reset_index(drop=True)
     snap = cm.calcular(preco_longo, fng=fng_full if not fng_full.empty else None,
-                       series_onchain=series)
+                       series_onchain=series, dados_cm=dados_cm)
     hist = cm.serie_score(preco_longo, fng_full if not fng_full.empty else None,
-                          series)
+                          series, dados_cm=dados_cm)
     return snap, hist
 
 
@@ -274,8 +325,9 @@ snapshot = carregar_snapshot_termometro(periodo, float(fng_atual), onchain_tuple
 # ==========================================================================
 with st.expander("⚙️ Configurar indicadores do termômetro"):
     if not term.tem_chave_onchain():
-        st.caption("On-chain (MVRV, SOPR, NUPL, Puell...) aparecem ao definir a "
-                   "chave grátis `BGEO_API_KEY` (api.bgeometrics.com).")
+        st.caption("MVRV, MVRV Z-Score, NUPL e Puell vêm de graça da **Coin "
+                   "Metrics** (sem chave). Com a chave grátis `BGEO_API_KEY` "
+                   "(api.bgeometrics.com) entram também SOPR e Reserve Risk.")
     modo_pesos = st.toggle("⚖️ Ajustar pesos por indicador", value=False,
                            help="Desligado = média simples.")
 
@@ -300,7 +352,7 @@ with st.expander("⚙️ Configurar indicadores do termômetro"):
         for i, row in enumerate(gratis.itertuples()):
             _render_indicador(cols_g[i], row)
     if not onchain.empty:
-        st.caption("On-chain (BGeometrics)")
+        st.caption("On-chain (Coin Metrics grátis · BGeometrics com chave)")
         cols_o = st.columns(min(4, len(onchain)))
         for i, row in enumerate(onchain.itertuples()):
             _render_indicador(cols_o[i % len(cols_o)], row)
@@ -366,7 +418,14 @@ aba_ciclo, aba_term, aba_preco, aba_bt, aba_ia = st.tabs(
 # --------------------------------------------------------------------------
 with aba_ciclo:
     cycle_oc = carregar_cycle_onchain()
-    snap_ciclo, hist_ciclo = carregar_cycle(tuple(sorted(cycle_oc.items())))
+    dados_cm_tab = carregar_coinmetrics()
+    # A assinatura (nº de linhas + última data) invalida o cache quando a
+    # Coin Metrics publica um dia novo, sem carregar o CSV inteiro na chave.
+    assinatura_cm = ((len(dados_cm_tab), str(dados_cm_tab["date"].max().date()))
+                     if dados_cm_tab is not None and not dados_cm_tab.empty
+                     else (0, ""))
+    snap_ciclo, hist_ciclo = carregar_cycle(tuple(sorted(cycle_oc.items())),
+                                            assinatura_cm)
 
     if not snap_ciclo:
         st.info("Não foi possível montar o modelo de ciclo agora (preço "
@@ -374,7 +433,7 @@ with aba_ciclo:
     else:
         # --- O card visual (HTML+SVG). Vai num iframe para o CSS do card não
         #     brigar com o tema do Streamlit.
-        components.html(cm.card_html(snap_ciclo), height=680, scrolling=True)
+        _html_em_iframe(cm.card_html(snap_ciclo), altura=680)
 
         plano_c = snap_ciclo["plano"]
         c1, c2, c3, c4 = st.columns(4)
@@ -388,11 +447,81 @@ with aba_ciclo:
         c4.metric("DCA adaptativo", f"{plano_c['dca']:.2f}×",
                   "do aporte normal", delta_color="off")
 
+        defasadas_ciclo = snap_ciclo.get("fontes_defasadas") or []
+        if defasadas_ciclo:
+            nomes = ", ".join(
+                f"**{cm.NOMES_FONTES.get(d['fonte'], d['fonte'])}** "
+                f"({d['idade']} dias)" for d in defasadas_ciclo)
+            st.warning(
+                f"On-chain atrasado: {nomes}. Em vez de casar um dado velho "
+                "com o preço de hoje, o modelo devolveu esses pilares para os "
+                "proxies de preço — que estão em dia. A leitura continua "
+                "válida, só com menos informação.")
+
         if snap_ciclo["fonte"] != "on-chain":
-            st.caption("Rodando com os **proxies grátis** (calculados do preço). "
-                       "Defina a chave `BGEO_API_KEY` para trocar os proxies "
-                       "pelas métricas on-chain reais (MVRV Z, NUPL, SOPR, "
-                       "RHODL, Supply in Profit).")
+            st.caption("Rodando com os **proxies grátis** (calculados do preço) "
+                       "— a Coin Metrics não respondeu agora. Ela normalmente "
+                       "traz MVRV, NUPL e Puell reais sem chave nenhuma.")
+        else:
+            origem = {"api": "API community (ao vivo)",
+                      "snapshot": "snapshot do repositório (atualizado 1×/dia)",
+                      "cache": "cache local", "mirror": "CSV histórico"}.get(
+                          snap_ciclo.get("origem_onchain"), "—")
+            st.caption(f"Dado on-chain via **{origem}**. "
+                       "Com `BGEO_API_KEY` entram também SOPR, RHODL e Supply "
+                       "in Profit. MVRV Z-Score e NUPL saem da mesma relação "
+                       "market cap ÷ realized cap — são pilares correlacionados "
+                       "por construção.")
+
+        # --- Do score para a MINHA posição: quanto comprar/vender agora.
+        with st.expander("💰 Rebalanceamento — o que fazer com a minha posição"):
+            st.caption("Só aritmética em cima da curva de exposição do modelo. "
+                       "Nada sai daqui: os valores não são salvos nem enviados.")
+            r1, r2, r3 = st.columns(3)
+            patrimonio = r1.number_input(
+                "Patrimônio total considerado", min_value=0.0, value=10000.0,
+                step=500.0, help="BTC + caixa/renda fixa que entram nesta alocação.")
+            em_btc = r2.number_input(
+                "Quanto disso já está em BTC", min_value=0.0, value=5000.0,
+                step=500.0)
+            aporte_base = r3.number_input(
+                "Aporte recorrente normal", min_value=0.0, value=500.0, step=100.0,
+                help="Quanto você aportaria num mês comum. O DCA adaptativo "
+                     "multiplica esse valor.")
+            banda = st.slider(
+                "Banda de tolerância (p.p.)", 0.0, 15.0, 5.0, 0.5,
+                help="Dentro da banda o modelo manda NÃO mexer — giro custa "
+                     "taxa e imposto e quase não muda o risco.")
+
+            reb = cm.plano_rebalanceamento(
+                snap_ciclo["score"], patrimonio=patrimonio, valor_em_btc=em_btc,
+                banda=banda, preco_btc=snap_ciclo.get("preco"),
+                aporte_base=aporte_base)
+
+            if reb["acao"] == "—":
+                st.info("Preencha o patrimônio total para calcular.")
+            else:
+                cor_acao = {"COMPRAR": VERDE, "VENDER": VERMELHO,
+                            "MANTER": "#8a8f98"}[reb["acao"]]
+                q1, q2, q3, q4 = st.columns(4)
+                q1.metric("Exposição atual", f"{reb['atual_pct']:.0f}%",
+                          f"{reb['desvio_pp']:+.0f} p.p. vs alvo",
+                          delta_color="off")
+                q2.metric("Alvo da fase", f"{reb['alvo_pct']:.0f}%")
+                q3.metric("Ajuste", f"{reb['ajuste']:+,.0f}",
+                          None if reb["ajuste_btc"] is None
+                          else f"{reb['ajuste_btc']:+.4f} BTC", delta_color="off")
+                q4.metric("Aporte deste mês", f"{reb['aporte_sugerido']:,.0f}",
+                          f"{cm.multiplicador_dca(snap_ciclo['score']):.2f}× o normal",
+                          delta_color="off")
+                st.markdown(
+                    f"<div style='background:{cor_acao}22;border-left:3px solid "
+                    f"{cor_acao};border-radius:8px;padding:10px 14px'>"
+                    f"<b style='color:{cor_acao}'>{reb['acao']}</b><br>"
+                    f"<span style='font-size:13px'>{reb['detalhe']}</span></div>",
+                    unsafe_allow_html=True)
+                st.caption("⚠️ Não é recomendação financeira. Rebalanceamento "
+                           "gera evento tributável — considere as regras do seu país.")
 
         # --- Histórico: preço (log) em cima, score com as faixas de fase embaixo.
         if not hist_ciclo.empty:
@@ -420,7 +549,7 @@ with aba_ciclo:
             figc.update_yaxes(range=[0, 100], row=2, col=1)
             figc.update_layout(template="plotly_dark", height=560, showlegend=False,
                                margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(figc, use_container_width=True)
+            st.plotly_chart(figc, **_largura())
 
             # --- Leitura semanal (o modelo é de ciclo: decida no fim de semana).
             sem = cm.serie_semanal(hist_ciclo).tail(12).iloc[::-1]
@@ -435,7 +564,7 @@ with aba_ciclo:
                     "DCA": sem["score"].map(lambda v: f"{cm.multiplicador_dca(v):.2f}×"),
                 })
                 st.markdown("**Score semanal** — uma decisão por semana, no máximo.")
-                st.dataframe(sem_show, use_container_width=True, hide_index=True)
+                st.dataframe(sem_show, **_largura(), hide_index=True)
 
             # --- Backtest da curva de exposição.
             btc_ = cm.backtest_exposicao(hist_ciclo)
@@ -463,7 +592,7 @@ with aba_ciclo:
                                         title="Capital acumulado (1 = início)",
                                         legend=dict(orientation="h", y=1.14),
                                         yaxis_title="Múltiplo do capital")
-                    st.plotly_chart(figbc, use_container_width=True)
+                    st.plotly_chart(figbc, **_largura())
                     st.caption("O modelo troca retorno por drawdown: fica menos "
                                "exposto perto do topo do ciclo. Sem taxas nem "
                                "impostos. **Não é recomendação financeira.**")
@@ -484,7 +613,7 @@ with aba_ciclo:
                 "Leitura": c["rotulo"],
                 "O que mede": c["sobre"],
             } for c in snap_ciclo["componentes"]]),
-                use_container_width=True, hide_index=True)
+                **_largura(), hide_index=True)
             st.caption("⚠️ Limiares de fundo e topo mudam a cada ciclo. "
                        "**Não é recomendação financeira.**")
 
@@ -513,7 +642,7 @@ with aba_term:
             }))
         gauge.update_layout(template="plotly_dark", height=240,
                             margin=dict(l=20, r=20, t=40, b=0))
-        st.plotly_chart(gauge, use_container_width=True)
+        st.plotly_chart(gauge, **_largura())
     with g2:
         ok_scores = snapshot[snapshot["ok"]]["score"].dropna()
         st.metric("🟢 Compra", int((ok_scores > 0).sum()))
@@ -544,7 +673,7 @@ with aba_term:
     styler = (tab_show.style
               .map(_cor_sinal, subset=["Sinal"])
               .format({"Score": lambda v: "—" if pd.isna(v) else f"{int(v):+d}"}))
-    st.dataframe(styler, use_container_width=True, hide_index=True)
+    st.dataframe(styler, **_largura(), hide_index=True)
     st.caption("Score por indicador (−2 a +2); o consolidado é a média dos "
                "selecionados. **Não é recomendação financeira.**")
 
@@ -569,7 +698,7 @@ with aba_term:
                            legend=dict(orientation="h", y=1.12))
         figt.update_yaxes(title_text="Preço (USD)", secondary_y=False)
         figt.update_yaxes(title_text="Score", range=[-2.2, 2.2], secondary_y=True)
-        st.plotly_chart(figt, use_container_width=True)
+        st.plotly_chart(figt, **_largura())
 
     # Histórico próprio (log diário), se já houver dias suficientes.
     log = term.ler_log_diario()
@@ -586,7 +715,7 @@ with aba_term:
                                legend=dict(orientation="h", y=1.15))
             figl.update_yaxes(title_text="Preço", secondary_y=False)
             figl.update_yaxes(title_text="Score", range=[-2.2, 2.2], secondary_y=True)
-            st.plotly_chart(figl, use_container_width=True)
+            st.plotly_chart(figl, **_largura())
 
 # --------------------------------------------------------------------------
 # ABA 2 — PREÇO & HUMOR (Fear & Greed + Google Trends)
@@ -625,7 +754,7 @@ with aba_preco:
     fig.update_layout(template="plotly_dark", height=560,
                       margin=dict(l=10, r=10, t=40, b=10),
                       legend=dict(orientation="h", y=1.08))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **_largura())
 
 # --------------------------------------------------------------------------
 # ABA 3 — BACKTEST
@@ -672,7 +801,7 @@ with aba_bt:
                            title="Capital acumulado (1 = início)",
                            legend=dict(orientation="h", y=1.12),
                            yaxis_title="Múltiplo do capital")
-        st.plotly_chart(figb, use_container_width=True)
+        st.plotly_chart(figb, **_largura())
         st.caption("⚠️ Simplificado (sem taxas/impostos) — não prevê o futuro.")
 
 # --------------------------------------------------------------------------
@@ -695,6 +824,11 @@ with aba_ia:
             def rotular(n):
                 return "🟢 positivo" if n > 0.15 else "🔴 negativo" if n < -0.15 else "⚪ neutro"
 
+            if classificados["nota"].isna().all():
+                st.warning(
+                    "O modelo de sentimento não está instalado neste ambiente "
+                    "(`pip install -r requirements.txt`), então as notas saem "
+                    "vazias. O resto do app não depende disso.")
             tabela = classificados.assign(sentimento=classificados["nota"].map(rotular))
             st.caption(f"Modelo: **{modelo_usado}**  |  "
                        f"nota média: **{classificados['nota'].mean():.3f}**  |  "
@@ -702,7 +836,7 @@ with aba_ia:
             st.dataframe(
                 tabela.sort_values("date", ascending=False)[
                     ["date", "subreddit", "title", "sentimento", "nota"]],
-                use_container_width=True, hide_index=True,
+                **_largura(), hide_index=True,
                 column_config={
                     "date": "Data", "subreddit": "Fonte", "title": "Título",
                     "sentimento": "IA",

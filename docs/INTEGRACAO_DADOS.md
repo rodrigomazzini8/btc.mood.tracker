@@ -68,6 +68,48 @@ GET https://api.bgeometrics.com/v1/mvrv?token=SEU_TOKEN
 
 ---
 
+## 3b) On-chain GRÁTIS e SEM CHAVE — Coin Metrics Community
+
+Melhor fonte on-chain sem cadastro: a Coin Metrics publica o dataset
+"community" do BTC como CSV no GitHub.
+
+- **URL (recomendada, ~1 dia de atraso):**
+  `https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=PriceUSD,CapMrktCurUSD,CapMVRVCur,IssTotUSD&frequency=1d&page_size=10000&paging_from=start`
+  Resposta: `{"data":[{"time":"...","PriceUSD":"...",...}], "next_page_url": "..."}`
+  Siga `next_page_url` até acabar (com teto de páginas).
+- **URL (histórica, CONGELADA em 24/05/2026 — não use como fonte principal):**
+  `https://raw.githubusercontent.com/coinmetrics/data/master/csv/btc.csv`
+- **Tamanho:** ~2,5 MB (série diária desde 2010). **Cacheie** por 6–24h.
+- **Colunas usadas:** `time`, `PriceUSD`, `CapMrktCurUSD` (market cap),
+  `CapMVRVCur` (MVRV), `IssTotUSD` (emissão do dia em USD).
+- **Uso não comercial.** Crédito: Coin Metrics Community Data.
+
+Dá para derivar as métricas de ciclo mais importantes:
+
+```
+realized_cap = CapMrktCurUSD / CapMVRVCur
+MVRV         = CapMVRVCur
+MVRV Z-Score = (market_cap − realized_cap) / desvio_padrão(market_cap)
+               (use desvio EXPANDIDO, só com o passado, p/ não ter look-ahead)
+NUPL         = 1 − 1/MVRV
+Puell        = IssTotUSD / média_365d(IssTotUSD)
+```
+
+Bônus: a resposta também traz o **preço** (`PriceUSD`), então serve de
+fallback quando Binance/CoinGecko estiverem bloqueados no seu servidor.
+
+**Cheque o frescor sempre.** Fonte pública morre em silêncio: o CSV do GitHub
+parou em maio/2026 e continuou respondendo 200 com dado velho. Regra: escolha
+a fonte pela DATA do último registro, não pela primeira que responder; se
+nada estiver em dia, use a menos velha e avise. Se o seu servidor não alcança
+a API, faça como aqui — um job diário (GitHub Actions) busca e versiona um
+CSV pequeno, e o app lê do repositório.
+
+Não tem: SOPR, RHODL e Supply in Profit — para esses, só a BGeometrics
+(seção 3) ou um proxy.
+
+---
+
 ## 4) Termômetro — como vira um SCORE de −2 a +2
 
 Cada indicador é convertido num score inteiro de **−2 (venda forte)** a
@@ -76,18 +118,26 @@ ponderada) dos indicadores escolhidos.
 
 ### Faixas (valor ≤ limiar → score)
 
+Recalibradas contra a série real de 2010–2026 (as antigas liam o topo de
+out/2025 como NEUTRO — ver seção 5 sobre a queda de amplitude dos ciclos).
+
 ```
-mayer        (preço/MM200d):   ≤0.8:+2  ≤1.0:+1  ≤1.5:0  ≤2.4:-1  resto:-2
-ma200w       (preço/MM200sem): ≤1.0:+2  ≤1.5:+1  ≤3.0:0  ≤5.0:-1  resto:-2
-rsi_mensal   (RSI 14 mensal):  ≤30:+2   ≤45:+1   ≤60:0   ≤70:-1   resto:-2
+mayer        (preço/MM200d):   ≤0.75:+2 ≤0.95:+1 ≤1.2:0  ≤1.5:-1  resto:-2
+ma200w       (preço/MM200sem): ≤1.0:+2  ≤1.3:+1  ≤1.8:0  ≤2.2:-1  resto:-2
+rsi_mensal   (RSI 14 mensal):  ≤45:+2   ≤57:+1   ≤67:0   ≤76:-1   resto:-2
+             (a mediana do RSI mensal do BTC é ~63, não 50)
 fng          (Fear&Greed):     ≤20:+2   ≤40:+1   ≤60:0   ≤80:-1   resto:-2
-mvrv:                          ≤1.0:+2  ≤1.5:+1  ≤2.5:0  ≤3.5:-1  resto:-2
+mvrv:                          ≤0.9:+2  ≤1.3:+1  ≤1.8:0  ≤2.3:-1  resto:-2
 sopr:                          ≤0.95:+2 ≤1.0:+1  ≤1.02:0 ≤1.05:-1 resto:-2
-mvrv_z       (mvrv-zscore):    ≤0.0:+2  ≤2.0:+1  ≤4.0:0  ≤6.0:-1  resto:-2
-nupl:                          ≤0.0:+2  ≤0.25:+1 ≤0.5:0  ≤0.75:-1 resto:-2
-puell        (puell-multiple): ≤0.5:+2  ≤1.0:+1  ≤2.0:0  ≤4.0:-1  resto:-2
+mvrv_z       (mvrv-zscore):    ≤-0.2:+2 ≤0.8:+1  ≤2.0:0  ≤2.7:-1  resto:-2
+nupl:                          ≤0.05:+2 ≤0.25:+1 ≤0.45:0 ≤0.60:-1 resto:-2
+puell        (puell-multiple): ≤0.5:+2  ≤0.8:+1  ≤1.3:0  ≤1.9:-1  resto:-2
 reserve_risk (reserve-risk):   ≤0.002:+2 ≤0.005:+1 ≤0.01:0 ≤0.02:-1 resto:-2
+             (única sem fonte grátis; limiares clássicos, não conferidos)
 ```
+
+MVRV, MVRV Z-Score, NUPL e Puell saem de graça da Coin Metrics (seção 3b) —
+para o termômetro, só SOPR e Reserve Risk exigem a chave da BGeometrics.
 
 ### Score consolidado → rótulo
 
@@ -114,29 +164,66 @@ no ciclo** o mercado está e **qual posição carregar**. Escala contínua
 
 ### Escalas (valor → sub-score 0..100, interpolando)
 
+Calibradas contra a série real de 2010–2026 (ver `scripts/07_calibracao.py`).
+**Ponto-chave: a amplitude do ciclo cai a cada ciclo** — MVRV Z-Score nos
+topos foi 8,9 (2013) → 8,9 (2017) → 5,3 (abr/21) → 3,5 (nov/21) → 2,9
+(mar/24) → 2,5 (out/25). Escala de topo em "Z > 6" não dispara mais.
+
 ```
-mvrv_z:        -1→0   0→10  1→26  2→42  3→56  4→70  5→82  6.5→93  8→100
-nupl:        -0.25→0   0→12  .25→32  .40→45  .50→58  .60→71  .70→86  .85→100
-supply_lucro:   45→0  55→12  65→25  75→40  85→58  92→74  96→88  99→100   (em %)
-rhodl (log10): 2.6→0  3.0→16  3.4→34  3.8→54  4.2→74  4.5→89  5.0→100
-sopr (MM7d):  0.95→0  0.98→16  1.00→35  1.01→50  1.02→65  1.035→80  1.08→100
-mayer:         0.6→0  0.8→14  1.0→30  1.3→46  1.7→62  2.2→79  3.5→100
-fng:             5→0   20→16   35→33   50→50   65→67   80→84   92→100
-halving (dias):  0→32  180→46  350→62  520→85  560→90  700→62  900→38  1100→18
+# --- on-chain real ---
+mvrv_z:      -1→0  -0.5→4  0→10  0.5→20  1→30  1.5→40  2→52  2.5→72  3→82
+             3.5→89  4.5→94  6→98  8→100
+mvrv:        0.6→0  0.8→8  1→18  1.2→28  1.4→38  1.7→50  2→62  2.3→74
+             2.7→84  3.2→91  4→96  5→100
+nupl:      -0.5→0  -0.25→6  0→14  .15→25  .30→38  .42→50  .50→60  .56→70
+             .62→79  .68→87  .75→95  .85→100
+puell:       0.3→0  0.45→8  0.6→18  0.8→32  1→45  1.3→58  1.7→70  2.2→80
+             3→89  5→96  9→100
+supply_lucro (%): 50→0  60→10  70→22  78→34  85→48  90→60  94→72  97→85
+             99→95  100→100
+rhodl (log10):    2.6→0  3.0→14  3.3→28  3.6→44  3.9→60  4.1→74  4.35→88  4.7→100
+sopr (MM7d):      0.95→0  0.98→16  1.00→35  1.01→50  1.02→65  1.035→80
+             1.05→92  1.08→100
+
+# --- proxies (só preço) — CADA UM COM ESCALA PRÓPRIA ---
+z_extensao:  z-score de log(preço/MA200sem) em janela MÓVEL de 4 anos
+             -2.3→0  -1.6→8  -1.2→18  -0.8→32  -0.29→50  0.2→62  0.6→72
+             1.0→82  1.4→90  2.0→96  2.8→100
+nupl_proxy (= 1 − MA200sem/preço):
+             -0.5→0  -0.2→8  0→16  .15→27  .30→38  .44→50  .55→62  .65→73
+             .75→84  .85→93  .95→100
+supply_lucro_proxy (% dos últimos 1460 dias abaixo do preço de hoje):
+             48→0  58→10  66→20  72→30  79→40  85→50  90→60  94→70  97→80
+             99→90  100→100
+drawdown (% do topo histórico):
+             -85→0  -75→8  -65→18  -55→30  -46→42  -35→55  -25→66  -15→77
+             -8→86  -3→94  0→100
+mayer:       0.5→0  0.7→10  0.85→22  1→36  1.11→50  1.25→62  1.4→71  1.6→80
+             1.9→89  2.4→96  3.5→100
+rsi_mensal:  25→0  35→8  45→20  52→30  58→40  63→50  68→60  73→70  80→82
+             88→93  95→100
+             (a mediana do RSI mensal do BTC é ~63, NÃO 50 — usar 50→50
+              faz o modelo ler fundo de ciclo como "neutro")
+fng:         5→0  20→16  35→33  50→50  65→67  80→84  92→100
+halving (dias): 0→32  180→46  350→62  520→85  560→90  700→62  900→38
+             1100→18  1300→22  1460→30
 ```
 
 Fora das pontas o valor "gruda" no extremo (0 ou 100).
 
 ### Pilares e pesos (média ponderada só dos que TÊM dado)
 
-| Pilar | Peso | On-chain | Fallback grátis (só preço) |
-|-------|-----:|----------|----------------------------|
-| MVRV Z-Score | 0.22 | `mvrv-zscore` | z-score de `preço/MA200sem` |
-| NUPL | 0.20 | `nupl` | `1 − MA200sem/preço` |
-| Supply in Profit | 0.15 | `supply-in-profit` | % dos últimos 1460 dias com fechamento < preço de hoje |
-| RHODL Ratio | 0.13 | `rhodl-ratio` (ou `reserve-risk`) | drawdown do topo histórico (%) |
-| SOPR | 0.10 | `sopr` (MM 7d) | RSI mensal |
-| Ciclo & Sentimento | 0.20 | — | média de Mayer + Fear&Greed + relógio do halving |
+Ordem de preferência por pilar: BGeometrics (chave) → Coin Metrics (grátis) →
+proxy de preço.
+
+| Pilar | Peso | BGeometrics | Coin Metrics | Proxy (só preço) |
+|-------|-----:|-------------|--------------|------------------|
+| MVRV Z-Score | 0.22 | `mvrv-zscore` | MVRV Z-Score real | `z_extensao` |
+| NUPL | 0.20 | `nupl` | NUPL real | `nupl_proxy` |
+| Supply in Profit | 0.15 | `supply-in-profit` | — | `supply_lucro_proxy` |
+| RHODL Ratio | 0.13 | `rhodl-ratio` / `reserve-risk` | Puell real | `drawdown` |
+| SOPR | 0.10 | `sopr` (MM 7d) | — | `rsi_mensal` |
+| Ciclo & Sentimento | 0.20 | — | — | média de Mayer + F&G + halving |
 
 `score = Σ(sub_i × peso_i) / Σ(peso_i disponível)` — se um pilar falta, o peso
 dele é redistribuído (o score fica sempre em 0..100).
@@ -155,6 +242,52 @@ multiplicador DCA:  0→3.0  15→2.5  30→1.8  45→1.2  60→0.8  70→0.5  8
 
 Para bot: mande **o score do fechamento semanal** (o modelo é de ciclo) e
 avise quando a **fase mudar** — não a cada oscilação diária.
+
+### Alerta de mudança de fase (com histerese)
+
+Trocar de fase no limiar seco gera alerta todo dia quando o score oscila em
+cima dele (34,9 / 35,1). Exija uma margem:
+
+```
+fase_nova = fase(score)
+se fase_nova != fase_guardada:
+    se subiu:   confirma só se score >= limiar_de_entrada + margem   (margem ~1.5)
+    se desceu:  confirma só se score <= limiar_de_saída  − margem
+    senão: mantém a fase guardada (não alerta)
+guarde a fase confirmada e só avise quando ela mudar
+```
+
+Implementado em `cycle_model.fase_confirmada()` e usado pelo
+`scripts/08_alerta.py`, que aceita `ALERTA_WEBHOOK` (a URL do `sendMessage`
+do bot do Telegram funciona direto).
+
+### Frescor do dado (não faça ffill infinito)
+
+Toda fonte on-chain atrasa em algum momento. Carregar o último valor
+indefinidamente cola um MVRV velho no preço de hoje e produz um score
+falsamente preciso. Regra usada aqui:
+
+```
+carregue o último valor on-chain por no máximo 7 dias
+passando disso: trate como AUSENTE -> o pilar cai no proxy de preço
+                e avise o usuário (nome da fonte + dias de atraso)
+```
+
+Implementado em `cycle_model.MAX_DIAS_CARREGO` e `idade_das_fontes()`.
+
+### Do score para a posição do usuário
+
+```
+alvo   = exposição-alvo(score)                  # curva da seção acima
+atual  = valor_em_btc / patrimônio * 100
+desvio = atual − alvo
+se |desvio| <= banda (ex.: 5 p.p.): NÃO MEXER   # giro custa taxa e imposto
+senão: ajuste_em_dinheiro = (alvo − atual)/100 * patrimônio
+       (positivo = comprar, negativo = realizar — sempre em parcelas)
+aporte_do_mês = aporte_base * multiplicador_DCA(score)
+```
+
+Implementado em `cycle_model.plano_rebalanceamento()`.
 
 ---
 
@@ -182,7 +315,38 @@ Dicas para o bot:
 
 ---
 
-## 7) Aviso
+## 7) Bot do Telegram (implementado)
+
+O pseudocódigo da seção 6 virou código: `scripts/telegram_bot.py` (módulo) e
+`scripts/10_telegram.py` (entrada). Sem biblioteca de bot — só `requests`.
+
+```
+POST https://api.telegram.org/bot<TOKEN>/sendMessage
+     {"chat_id": ..., "text": ..., "parse_mode": "HTML",
+      "disable_web_page_preview": true}
+
+POST https://api.telegram.org/bot<TOKEN>/getUpdates
+     {"offset": <ultimo_update_id + 1>, "timeout": 25}     # long polling
+```
+
+Regras que evitam os erros clássicos:
+
+- **offset**: sempre `max(update_id) + 1`, senão o bot responde a mesma
+  mensagem para sempre;
+- **`/comando@NomeDoBot`**: em grupo o Telegram acrescenta o @; corte antes
+  de rotear;
+- **mensagem sem `/`**: não responda (senão o bot tagarela em grupo);
+- **try/except por update**: uma mensagem estranha não pode derrubar o loop;
+- **HTML escapado**: o texto é montado à mão, então escape tudo que vem de
+  fora (`html.escape`);
+- **cache dos dados** por ~15 min: o modelo é de ciclo, não muda em minutos;
+- **alerta**: mande só na MUDANÇA de fase (com histerese, seção 5) e guarde a
+  fase entre execuções — no GitHub Actions isso significa versionar o estado,
+  porque o runner é descartado. Se o envio falhar, **não** grave o estado.
+
+---
+
+## 8) Aviso
 
 Tudo aqui é **educativo**. Sinais e correlações **não preveem** o futuro e
 **não são recomendação financeira ou de investimento**. Faça sua própria
