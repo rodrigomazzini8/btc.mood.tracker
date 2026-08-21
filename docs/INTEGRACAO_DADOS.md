@@ -315,7 +315,38 @@ Dicas para o bot:
 
 ---
 
-## 7) Aviso
+## 7) Bot do Telegram (implementado)
+
+O pseudocódigo da seção 6 virou código: `scripts/telegram_bot.py` (módulo) e
+`scripts/10_telegram.py` (entrada). Sem biblioteca de bot — só `requests`.
+
+```
+POST https://api.telegram.org/bot<TOKEN>/sendMessage
+     {"chat_id": ..., "text": ..., "parse_mode": "HTML",
+      "disable_web_page_preview": true}
+
+POST https://api.telegram.org/bot<TOKEN>/getUpdates
+     {"offset": <ultimo_update_id + 1>, "timeout": 25}     # long polling
+```
+
+Regras que evitam os erros clássicos:
+
+- **offset**: sempre `max(update_id) + 1`, senão o bot responde a mesma
+  mensagem para sempre;
+- **`/comando@NomeDoBot`**: em grupo o Telegram acrescenta o @; corte antes
+  de rotear;
+- **mensagem sem `/`**: não responda (senão o bot tagarela em grupo);
+- **try/except por update**: uma mensagem estranha não pode derrubar o loop;
+- **HTML escapado**: o texto é montado à mão, então escape tudo que vem de
+  fora (`html.escape`);
+- **cache dos dados** por ~15 min: o modelo é de ciclo, não muda em minutos;
+- **alerta**: mande só na MUDANÇA de fase (com histerese, seção 5) e guarde a
+  fase entre execuções — no GitHub Actions isso significa versionar o estado,
+  porque o runner é descartado. Se o envio falhar, **não** grave o estado.
+
+---
+
+## 8) Aviso
 
 Tudo aqui é **educativo**. Sinais e correlações **não preveem** o futuro e
 **não são recomendação financeira ou de investimento**. Faça sua própria

@@ -1,0 +1,60 @@
+name: Alerta de fase (Telegram)
+
+# Manda mensagem no Telegram SÓ quando o ciclo muda de fase — sem servidor
+# ligado. Precisa de dois secrets no repositório:
+#   TELEGRAM_BOT_TOKEN  (o token que o @BotFather te deu)
+#   TELEGRAM_CHAT_ID    (o chat que recebe; o bot responde o seu em /alertas)
+# Sem os secrets o job avisa e sai sem erro — não quebra o repositório de
+# quem não usa o bot.
+on:
+  schedule:
+    # 12:10 UTC (o snapshot de dados roda 06:20; assim ele já está pronto).
+    - cron: "10 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alerta-telegram
+  cancel-in-progress: false
+
+jobs:
+  avisar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Conferir a fase e avisar se mudou
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "Sem TELEGRAM_BOT_TOKEN configurado — nada a fazer."
+            exit 0
+          fi
+          python scripts/10_telegram.py --alerta
+
+      - name: Guardar a fase avisada
+        run: |
+          # O runner é descartado a cada execução: sem versionar o estado, o
+          # bot avisaria a mesma virada todo dia.
+          git add data/alerta_estado.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Fase inalterada — sem commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          fase=$(python -c "import json;print(json.load(open('data/alerta_estado.json'))['fase'])")
+          git commit -m "alerta: fase do ciclo agora é ${fase} [skip ci]"
+          git push

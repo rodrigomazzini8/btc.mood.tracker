@@ -35,37 +35,19 @@ recomendação financeira.
 
 import os
 import sys
-import json
 import argparse
-import datetime as dt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import common          # noqa: E402
 import cycle_model as cm  # noqa: E402
 
-ESTADO = os.path.join(common.ROOT_DIR, "cache", "alerta_fase.json")
 WEBHOOK_ENV = "ALERTA_WEBHOOK"
 
-
-def ler_estado(caminho: str = ESTADO) -> dict:
-    """Última fase avisada (dict vazio na primeira vez)."""
-    try:
-        with open(caminho, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def salvar_estado(fase: str, score: float, caminho: str = ESTADO) -> None:
-    """Grava a fase avisada (silencioso se não der para escrever)."""
-    try:
-        os.makedirs(os.path.dirname(caminho), exist_ok=True)
-        with open(caminho, "w", encoding="utf-8") as f:
-            json.dump({"fase": fase, "score": round(float(score), 2),
-                       "em": dt.datetime.now().isoformat(timespec="seconds")}, f)
-    except Exception as e:
-        print(f"[alerta] não consegui salvar o estado: {e}")
+# A leitura/gravação da fase mora no cycle_model, para o bot do Telegram
+# (scripts/10_telegram.py) usar exatamente a mesma.
+ler_estado = cm.ler_estado_fase
+salvar_estado = cm.salvar_estado_fase
 
 
 def montar_mensagem(fase_nova: str, fase_antes: str | None, score: float,

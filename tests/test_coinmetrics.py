@@ -184,19 +184,21 @@ def test_snapshot_arredonda_para_o_git_nao_inchar(tmp_path):
     assert lido["date"].iloc[0].count("-") == 2   # data em YYYY-MM-DD
 
 
-def test_snapshot_do_repo_nao_pode_estar_no_gitignore():
+@pytest.mark.parametrize("arquivo", ["onchain_btc.csv", "alerta_estado.json"])
+def test_arquivos_de_estado_nao_podem_estar_no_gitignore(arquivo):
     """
     Regressão: o `.gitignore` tinha `*.csv`, então o snapshot que o CI gera
     nunca era commitado — o mecanismo inteiro de dado fresco ficava inerte,
-    em silêncio.
+    em silêncio. O mesmo valeria para o estado do alerta: sem ele versionado,
+    o bot avisaria a mesma virada de fase todo dia.
     """
     import subprocess
     raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    alvo = os.path.join(raiz, "data", "onchain_btc.csv")
+    alvo = os.path.join(raiz, "data", arquivo)
     try:
-        r = subprocess.run(["git", "check-ignore", alvo], cwd=raiz,
+        r = subprocess.run(["git", "check-ignore", "-q", alvo], cwd=raiz,
                            capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         pytest.skip("git não disponível")
     # returncode 1 = NÃO está ignorado, que é o que queremos.
-    assert r.returncode == 1, f"{alvo} está sendo ignorado pelo git"
+    assert r.returncode == 1, f"data/{arquivo} está sendo ignorado pelo git"

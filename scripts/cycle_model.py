@@ -58,6 +58,10 @@ modelagem de ciclo. Modelos de ciclo erram, e os limiares de "fundo" e
 
 from __future__ import annotations
 
+import os
+import json
+import datetime as dt
+
 import numpy as np
 import pandas as pd
 
@@ -1039,6 +1043,43 @@ def serie_semanal(hist: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # Mudança de fase com histerese (para alertas que não ficam piscando)
 # --------------------------------------------------------------------------
+
+# Onde fica a última fase avisada. Dois caminhos, de propósito:
+#   - `cache/` para uso local (não suja o repositório);
+#   - `data/` quando quem roda é o CI, que precisa VERSIONAR o estado para
+#     lembrar da fase entre execuções (o runner é descartado a cada vez).
+ESTADO_FASE_LOCAL = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "cache", "alerta_fase.json")
+ESTADO_FASE_VERSIONADO = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "alerta_estado.json")
+
+
+def ler_estado_fase(caminho: str | None = None) -> dict:
+    """Última fase avisada ({} na primeira vez)."""
+    try:
+        with open(caminho or ESTADO_FASE_LOCAL, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def salvar_estado_fase(fase: str, score: float, caminho: str | None = None,
+                       extra: dict | None = None) -> dict:
+    """Grava a fase avisada. Silencioso em erro de I/O (nunca derruba quem chama)."""
+    destino = caminho or ESTADO_FASE_LOCAL
+    estado = {"fase": fase, "score": round(float(score), 2),
+              "em": dt.datetime.now().isoformat(timespec="seconds")}
+    estado.update(extra or {})
+    try:
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, "w", encoding="utf-8") as f:
+            json.dump(estado, f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print(f"[estado] não consegui salvar em {destino}: {e}")
+    return estado
+
 
 def fase_confirmada(score: float, fase_anterior: str | None,
                     margem: float = 1.5) -> str:

@@ -264,6 +264,55 @@ Duas decisões de projeto que evitam o erro clássico de rebalancear demais:
 
 Nada é salvo nem enviado — as contas acontecem na sua sessão.
 
+### 🤖 Bot do Telegram
+
+O modelo no seu bolso — sem biblioteca de bot, só `requests`.
+
+**Criar o bot:** fale com o **@BotFather** no Telegram, mande `/newbot`, siga
+as instruções e guarde o token.
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:ABC..."   # do @BotFather
+python scripts/10_telegram.py --polling     # o bot passa a responder
+```
+
+Comandos:
+
+| Comando | O que faz |
+|---------|-----------|
+| `/score` | score de ciclo (0–100), fase, plano e composição |
+| `/termometro` | o sinal consolidado (−2 a +2) com os indicadores |
+| `/preco` | preço, variação e Fear & Greed |
+| `/semanal` | as últimas semanas (o modelo é de ciclo) |
+| `/rebalancear 10000 4000` | o que fazer com a sua posição |
+| `/alertas on\|off` | avisar neste chat quando a fase mudar |
+
+Detalhes de projeto: o bot **ignora mensagem que não é comando** (para não
+tagarelar em grupo), guarda os dados por 15 minutos (o score de ciclo não
+muda em 15 min, e assim cada mensagem não refaz download), **nunca morre por
+causa de uma mensagem** (cada update é tratado isolado) e aceita uma
+allowlist opcional de chats via `TELEGRAM_CHAT_IDS="111,222"`.
+
+Antes de configurar token nenhum, dá para ver o que ele responderia:
+
+```bash
+python scripts/10_telegram.py --teste     # imprime as mensagens, não envia
+```
+
+#### Alerta diário sem servidor
+
+`.github/workflows/alerta.yml` roda todo dia e manda mensagem **só quando a
+fase do ciclo muda**. Como o runner é descartado a cada execução, a fase fica
+versionada em `data/alerta_estado.json` — sem isso, o bot avisaria a mesma
+virada todos os dias.
+
+Para ligar: crie os secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` no
+repositório (Settings → Secrets and variables → Actions). Sem eles o job
+avisa e sai sem erro — não quebra o repositório de quem não usa o bot.
+
+Se o envio falhar, o estado **não** é gravado: no dia seguinte ele tenta de
+novo, em vez de engolir a virada.
+
 ### Alerta de mudança de fase
 
 O modelo é de ciclo: olhar o score todo dia vira ansiedade. O que muda
@@ -327,6 +376,7 @@ btc-mood-tracker/
 ├── .github/workflows/ci.yml # lint + testes em 3 versões de Python
 ├── tests/                  # suíte offline (não acessa a rede)
 ├── data/onchain_btc.csv    # snapshot on-chain, atualizado 1x/dia pelo CI
+├── data/alerta_estado.json # última fase avisada pelo bot (o CI versiona)
 ├── README.md
 ├── .gitignore              # ignora cache/, *.csv, *.png, __pycache__, modelos HF
 └── scripts/
@@ -340,6 +390,8 @@ btc-mood-tracker/
     ├── 07_calibracao.py        # confere os modelos nos topos/fundos reais
     ├── 08_alerta.py            # alerta (com histerese) de mudança de fase
     ├── 09_atualiza_dados.py    # baixa o on-chain e grava data/onchain_btc.csv
+    ├── 10_telegram.py          # bot do Telegram (polling, alerta ou teste)
+    ├── telegram_bot.py         # comandos, mensagens e API do Telegram
     ├── coinmetrics.py          # on-chain grátis sem chave (Coin Metrics)
     ├── termometro.py           # score consolidado -2..+2 (indicadores soltos)
     └── cycle_model.py          # modelo de CICLO 0-100 + card visual + backtest
@@ -387,6 +439,7 @@ python scripts/05_finbert.py          # Reddit + FinBERT (baixa o modelo na 1ª 
 python scripts/06_cycle_model.py      # 🔮 score de ciclo 0-100 + cycle_model.html
 python scripts/07_calibracao.py       # 🎯 calibração do modelo x história real
 python scripts/08_alerta.py           # 🔔 avisa quando o ciclo muda de fase
+python scripts/10_telegram.py --teste # 🤖 vê as mensagens do bot sem enviar
 ```
 
 ### Dashboard interativo
@@ -479,6 +532,7 @@ Observações:
 - [x] Faixas do Termômetro recalibradas e on-chain grátis (sem chave) nele também.
 - [x] Suíte de testes offline + CI no GitHub Actions.
 - [x] Rebalanceamento (com banda de tolerância) e alerta de mudança de fase.
+- [x] Bot do Telegram (comandos + alerta diário de mudança de fase, sem servidor).
 - [x] On-chain com no máximo 1 dia de atraso, atualizado sozinho todo dia.
 - [ ] Mais fontes de humor (funding rate, dominância).
 - [x] Modelo de ciclo 0–100 (Cycle Model) com card visual e plano de posição.
