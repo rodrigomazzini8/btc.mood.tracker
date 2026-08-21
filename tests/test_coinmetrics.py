@@ -8,6 +8,7 @@ na mão.
 """
 
 import io
+import os
 
 import numpy as np
 import pandas as pd
@@ -181,3 +182,21 @@ def test_snapshot_arredonda_para_o_git_nao_inchar(tmp_path):
     lido = pd.read_csv(destino)
     assert lido["CapMVRVCur"].iloc[0] == 1.234568
     assert lido["date"].iloc[0].count("-") == 2   # data em YYYY-MM-DD
+
+
+def test_snapshot_do_repo_nao_pode_estar_no_gitignore():
+    """
+    Regressão: o `.gitignore` tinha `*.csv`, então o snapshot que o CI gera
+    nunca era commitado — o mecanismo inteiro de dado fresco ficava inerte,
+    em silêncio.
+    """
+    import subprocess
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    alvo = os.path.join(raiz, "data", "onchain_btc.csv")
+    try:
+        r = subprocess.run(["git", "check-ignore", alvo], cwd=raiz,
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("git não disponível")
+    # returncode 1 = NÃO está ignorado, que é o que queremos.
+    assert r.returncode == 1, f"{alvo} está sendo ignorado pelo git"

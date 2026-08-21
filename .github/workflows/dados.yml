@@ -42,13 +42,16 @@ jobs:
 
       - name: Commitar se mudou
         run: |
-          if [ -z "$(git status --porcelain data/)" ]; then
+          # `git add` antes de comparar: assim a checagem enxerga arquivo novo
+          # (a versão anterior usava `git status` e não via o snapshot recém
+          # criado, nem denunciava que ele estava no .gitignore).
+          git add data/onchain_btc.csv
+          if git diff --cached --quiet; then
             echo "Nada mudou em data/ — sem commit."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ate=$(python -c "import pandas as pd; print(pd.read_csv('data/onchain_btc.csv')['date'].max())")
-          git add data/onchain_btc.csv
           git commit -m "dados: on-chain até ${ate}"
           git push
