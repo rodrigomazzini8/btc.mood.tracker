@@ -824,6 +824,11 @@ with aba_ia:
             def rotular(n):
                 return "🟢 positivo" if n > 0.15 else "🔴 negativo" if n < -0.15 else "⚪ neutro"
 
+            if classificados["nota"].isna().all():
+                st.warning(
+                    "O modelo de sentimento não está instalado neste ambiente "
+                    "(`pip install -r requirements.txt`), então as notas saem "
+                    "vazias. O resto do app não depende disso.")
             tabela = classificados.assign(sentimento=classificados["nota"].map(rotular))
             st.caption(f"Modelo: **{modelo_usado}**  |  "
                        f"nota média: **{classificados['nota'].mean():.3f}**  |  "

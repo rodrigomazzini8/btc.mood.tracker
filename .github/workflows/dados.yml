@@ -53,5 +53,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ate=$(python -c "import pandas as pd; print(pd.read_csv('data/onchain_btc.csv')['date'].max())")
-          git commit -m "dados: on-chain até ${ate}"
+          # [skip ci]: commit de dados não muda código. Sem isso o GitHub
+          # abre uma execução da suíte que, por ter sido disparada pelo bot,
+          # fica parada esperando aprovação manual ("action_required").
+          git commit -m "dados: on-chain até ${ate} [skip ci]"
           git push
